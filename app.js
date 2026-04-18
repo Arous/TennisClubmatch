@@ -14,6 +14,7 @@
   const DEFAULT_SUPABASE_URL = "https://isfkbxyjagwmfcdpemqb.supabase.co";
   const DEFAULT_SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZmtieHlqYWd3bWZjZHBlbXFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NTY4MDAsImV4cCI6MjA5MjAzMjgwMH0.6DmacuS3uD59s7L_VAwwNBlP4Vi6GhPsPkOhdKv48M8";
+  const BATTLE_POSTER_BG_SRC = "assets/battle-poster-bg.jpg";
 
   const MATCH_TYPE = {
     male: { code: "male", label: "남복" },
@@ -113,6 +114,7 @@
   let syncConnected = false;
   let dialogQueue = [];
   let activeDialogJob = null;
+  let battlePosterBackgroundPromise = null;
 
   init();
 
@@ -2790,7 +2792,7 @@
 
   async function shareMatchPoster() {
     try {
-      const canvas = createClubBattlePosterCanvas();
+      const canvas = await createClubBattlePosterCanvas();
       const clubAName = state.clubs[0]?.name || "클럽 1";
       const clubBName = state.clubs[1]?.name || "클럽 2";
       await shareOrDownloadPosterImage(canvas, {
@@ -2888,7 +2890,7 @@
     saveHintTimer = window.setTimeout(() => renderSaveStatus(), 1400);
   }
 
-  function createClubBattlePosterCanvas() {
+  async function createClubBattlePosterCanvas() {
     const width = 1600;
     const height = 900;
     const canvas = document.createElement("canvas");
@@ -2905,31 +2907,19 @@
     const location = state.matchLocation || "테니스장 미정";
     const dateText = formatPosterDateTime(state.matchDate);
 
-    const bg = ctx.createLinearGradient(0, 0, width, height);
-    bg.addColorStop(0, "#0f2d44");
-    bg.addColorStop(0.45, "#183f5f");
-    bg.addColorStop(1, "#0f2a3e");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, width, height);
-
-    const leftGlow = ctx.createRadialGradient(width * 0.2, height * 0.42, 50, width * 0.2, height * 0.42, 360);
-    leftGlow.addColorStop(0, "rgba(42, 142, 255, 0.38)");
-    leftGlow.addColorStop(1, "rgba(42, 142, 255, 0)");
-    ctx.fillStyle = leftGlow;
-    ctx.fillRect(0, 0, width, height);
-
-    const rightGlow = ctx.createRadialGradient(width * 0.8, height * 0.42, 50, width * 0.8, height * 0.42, 360);
-    rightGlow.addColorStop(0, "rgba(255, 121, 93, 0.34)");
-    rightGlow.addColorStop(1, "rgba(255, 121, 93, 0)");
-    ctx.fillStyle = rightGlow;
-    ctx.fillRect(0, 0, width, height);
-
-    const centerGlow = ctx.createRadialGradient(width / 2, height / 2, 80, width / 2, height / 2, 280);
-    centerGlow.addColorStop(0, "rgba(255, 255, 255, 0.82)");
-    centerGlow.addColorStop(0.5, "rgba(224, 245, 255, 0.34)");
-    centerGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
-    ctx.fillStyle = centerGlow;
-    ctx.fillRect(0, 0, width, height);
+    const bgImage = await getBattlePosterBackgroundImage();
+    if (bgImage) {
+      drawImageCover(ctx, bgImage, 0, 0, width, height);
+      const shade = ctx.createLinearGradient(0, 0, 0, height);
+      shade.addColorStop(0, "rgba(9, 23, 38, 0.62)");
+      shade.addColorStop(0.4, "rgba(10, 32, 48, 0.44)");
+      shade.addColorStop(1, "rgba(6, 18, 32, 0.68)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(0, 0, width, height);
+      drawBattlePosterGlow(ctx, width, height);
+    } else {
+      drawDefaultBattlePosterBackground(ctx, width, height);
+    }
 
     drawFittedText(ctx, {
       text: matchTitle,
@@ -3010,6 +3000,70 @@
     });
 
     return canvas;
+  }
+
+  async function getBattlePosterBackgroundImage() {
+    if (!battlePosterBackgroundPromise) {
+      const src = new URL(BATTLE_POSTER_BG_SRC, window.location.href).toString();
+      battlePosterBackgroundPromise = loadImage(src).catch((error) => {
+        window.console.warn("대항포스터 배경 이미지를 불러오지 못했습니다.", error);
+        return null;
+      });
+    }
+    return battlePosterBackgroundPromise;
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`이미지 로드 실패: ${src}`));
+      image.src = src;
+    });
+  }
+
+  function drawImageCover(ctx, image, x, y, width, height) {
+    if (!image || !image.width || !image.height) {
+      return;
+    }
+    const scale = Math.max(width / image.width, height / image.height);
+    const sourceWidth = width / scale;
+    const sourceHeight = height / scale;
+    const sourceX = (image.width - sourceWidth) / 2;
+    const sourceY = (image.height - sourceHeight) / 2;
+    ctx.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+  }
+
+  function drawBattlePosterGlow(ctx, width, height) {
+    const leftGlow = ctx.createRadialGradient(width * 0.2, height * 0.42, 60, width * 0.2, height * 0.42, 360);
+    leftGlow.addColorStop(0, "rgba(42, 142, 255, 0.38)");
+    leftGlow.addColorStop(1, "rgba(42, 142, 255, 0)");
+    ctx.fillStyle = leftGlow;
+    ctx.fillRect(0, 0, width, height);
+
+    const rightGlow = ctx.createRadialGradient(width * 0.8, height * 0.42, 60, width * 0.8, height * 0.42, 360);
+    rightGlow.addColorStop(0, "rgba(255, 121, 93, 0.34)");
+    rightGlow.addColorStop(1, "rgba(255, 121, 93, 0)");
+    ctx.fillStyle = rightGlow;
+    ctx.fillRect(0, 0, width, height);
+
+    const centerGlow = ctx.createRadialGradient(width / 2, height / 2, 80, width / 2, height / 2, 280);
+    centerGlow.addColorStop(0, "rgba(255, 255, 255, 0.74)");
+    centerGlow.addColorStop(0.45, "rgba(224, 245, 255, 0.27)");
+    centerGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = centerGlow;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawDefaultBattlePosterBackground(ctx, width, height) {
+    const bg = ctx.createLinearGradient(0, 0, width, height);
+    bg.addColorStop(0, "#0f2d44");
+    bg.addColorStop(0.45, "#183f5f");
+    bg.addColorStop(1, "#0f2a3e");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+    drawBattlePosterGlow(ctx, width, height);
   }
 
   function createStatsSummaryPosterCanvas() {
