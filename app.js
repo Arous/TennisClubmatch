@@ -101,7 +101,6 @@
   function init() {
     bindGlobalEvents();
     renderAll();
-    saveState(false);
     startNowLineTimer();
     renderSyncConfigInputs();
     renderSyncStatus("클라우드 동기화 꺼짐");
@@ -641,6 +640,7 @@
     if (!keepStatus) {
       renderSyncStatus("클라우드 동기화 꺼짐");
     }
+    setSyncButtonsState(false);
   }
 
   async function fetchRemoteSyncRow() {
