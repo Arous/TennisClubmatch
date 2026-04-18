@@ -30,7 +30,7 @@
 
 ## Supabase 실시간 동기화 설정
 
-앱 상단 `동기화 설정` 영역에 `Project URL / Anon Key / Match ID`를 입력하면 같은 경기 기준으로 데이터가 동기화됩니다.
+앱 상단 `동기화 설정` 영역에서 `Project URL / Anon Key`는 고정값으로 제공되며, `Match ID` 기준으로 데이터가 동기화됩니다.
 
 정적 웹앱 특성상 브라우저에 키가 노출되므로 **반드시 Anon Key만 사용**하세요(Service Role Key 사용 금지).
 
@@ -84,7 +84,7 @@ alter publication supabase_realtime add table public.shared_match_states;
 
 ### 3) 앱에서 연결
 
-1. 앱 상단 동기화 패널에 `Project URL`, `Anon Key`, `Match ID` 입력
+1. 앱 상단 동기화 패널에서 `Match ID` 입력
 2. 선택: `저장 비밀번호` 입력
 3. `동기화 연결` 클릭
 4. 같은 `Match ID`를 입력한 사용자끼리 같은 데이터를 공유

@@ -741,11 +741,9 @@
 
   function normalizeSyncConfig(input) {
     const source = isObject(input) ? input : {};
-    const url = String(source.url || "").trim();
-    const anonKey = String(source.anonKey || "").trim();
     return {
-      url: url || DEFAULT_SUPABASE_URL,
-      anonKey: anonKey || DEFAULT_SUPABASE_ANON_KEY,
+      url: DEFAULT_SUPABASE_URL,
+      anonKey: DEFAULT_SUPABASE_ANON_KEY,
       matchId: sanitizeMatchId(source.matchId || source.roomId),
       writePassword: String(source.writePassword || "").trim(),
       autoConnect: source.autoConnect !== false,
@@ -790,8 +788,6 @@
 
   function readSyncConfigFromInputs() {
     return normalizeSyncConfig({
-      url: String(el.supabaseUrlInput?.value || ""),
-      anonKey: String(el.supabaseAnonKeyInput?.value || ""),
       matchId: String(el.syncMatchIdInput?.value || ""),
       writePassword: String(el.syncWritePasswordInput?.value || ""),
       autoConnect: true,
