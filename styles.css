@@ -162,6 +162,60 @@ body {
   margin-top: 14px;
 }
 
+.sync-panel {
+  margin-top: 12px;
+  border: 1px solid #d7e1dc;
+  border-radius: 12px;
+  background: #f9fcfa;
+}
+
+.sync-details summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: #2f4f41;
+  padding: 10px 12px;
+}
+
+.sync-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.sync-details[open] summary {
+  border-bottom: 1px solid #dfe8e3;
+}
+
+.sync-grid {
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sync-field input {
+  font-size: 0.86rem;
+}
+
+.sync-room-field {
+  grid-column: span 2;
+}
+
+.sync-actions {
+  grid-column: span 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sync-status {
+  grid-column: span 2;
+  font-size: 0.84rem;
+  color: #4e6257;
+  font-weight: 700;
+  min-height: 1.2em;
+}
+
 .btn {
   border: 1px solid #c7d4cc;
   background: #ffffff;
@@ -354,14 +408,82 @@ body {
   border-radius: 12px;
   background: #f9fcfa;
   padding: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 54px;
+  min-height: 82px;
 }
 
 .club-player-box.empty {
   display: block;
+}
+
+.club-player-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.player-list-column {
+  border: 1px solid #dbe5df;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px;
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.player-list-column.gender-m {
+  border-color: rgba(42, 110, 255, 0.3);
+  background: linear-gradient(170deg, #ffffff, #f5f8ff);
+}
+
+.player-list-column.gender-f {
+  border-color: rgba(255, 70, 115, 0.3);
+  background: linear-gradient(170deg, #ffffff, #fff5f8);
+}
+
+.player-list-head {
+  display: flex;
+  justify-content: center;
+}
+
+.player-list-gender-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.player-list-column.gender-m .player-list-gender-icon {
+  background: rgba(42, 110, 255, 0.14);
+  color: #2a6eff;
+}
+
+.player-list-column.gender-f .player-list-gender-icon {
+  background: rgba(255, 70, 115, 0.14);
+  color: #d5315d;
+}
+
+.player-list-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+  min-height: 34px;
+}
+
+.player-list-stack.empty {
+  align-items: center;
+}
+
+.player-list-empty {
+  color: #687b70;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .club-player-card {
@@ -658,6 +780,26 @@ body {
 
 .slot-btn.filled {
   color: #26332d;
+  cursor: grab;
+}
+
+.slot-btn.filled:active {
+  cursor: grabbing;
+}
+
+.slot-btn.dragging {
+  opacity: 0.45;
+}
+
+.slot-btn.drop-target .slot-inner {
+  border-style: dashed;
+  box-shadow: 0 0 0 3px rgba(31, 143, 102, 0.2);
+}
+
+.slot-btn.empty.drop-target {
+  border-radius: 10px;
+  background: #edf8f1;
+  color: #2b6b4f;
 }
 
 .slot-btn.filled .slot-inner {
@@ -1183,9 +1325,78 @@ body {
 }
 
 .player-pool {
+  display: block;
+}
+
+.player-pool-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pool-column {
+  border: 1px solid #dbe6df;
+  border-radius: 10px;
+  background: #fff;
+  padding: 7px;
+  min-height: 70px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pool-column.gender-m {
+  border-color: rgba(42, 110, 255, 0.3);
+  background: linear-gradient(170deg, #ffffff, #f5f8ff);
+}
+
+.pool-column.gender-f {
+  border-color: rgba(255, 70, 115, 0.3);
+  background: linear-gradient(170deg, #ffffff, #fff5f8);
+}
+
+.pool-column-head {
+  display: flex;
+  justify-content: center;
+}
+
+.pool-column-icon {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.pool-column.gender-m .pool-column-icon {
+  background: rgba(42, 110, 255, 0.14);
+  color: #2a6eff;
+}
+
+.pool-column.gender-f .pool-column-icon {
+  background: rgba(255, 70, 115, 0.14);
+  color: #d5315d;
+}
+
+.pool-column-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-height: 34px;
+  align-content: flex-start;
+}
+
+.pool-column-list.empty {
+  align-items: center;
+}
+
+.pool-column-empty {
+  color: #687b70;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .pool-player-btn {
@@ -1268,6 +1479,16 @@ body {
 
   .clubs-grid {
     grid-template-columns: 1fr;
+  }
+
+  .sync-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-room-field,
+  .sync-actions,
+  .sync-status {
+    grid-column: span 1;
   }
 
   .player-stats-grid {

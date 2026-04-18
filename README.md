@@ -26,6 +26,67 @@
 - 저장 기능
   - 로컬 자동 저장(localStorage)
   - JSON 내보내기/불러오기
+  - Supabase 실시간 동기화(같은 Room ID 공유 시 다중 사용자 동시 반영)
+
+## Supabase 실시간 동기화 설정
+
+앱 상단 `Supabase 실시간 동기화` 영역에 `Project URL / Anon Key / Room ID`를 입력하면 같은 방(Room) 기준으로 데이터가 동기화됩니다.
+
+정적 웹앱 특성상 브라우저에 키가 노출되므로 **반드시 Anon Key만 사용**하세요(Service Role Key 사용 금지).
+
+### 1) SQL Editor에서 테이블/권한 생성
+
+```sql
+create table if not exists public.shared_match_states (
+  room_id text primary key,
+  payload jsonb not null,
+  updated_at timestamptz not null default now(),
+  updated_by text not null default ''
+);
+
+alter table public.shared_match_states enable row level security;
+
+grant usage on schema public to anon;
+grant select, insert, update on table public.shared_match_states to anon;
+
+drop policy if exists "shared_match_states_select_anon" on public.shared_match_states;
+create policy "shared_match_states_select_anon"
+on public.shared_match_states
+for select
+to anon
+using (true);
+
+drop policy if exists "shared_match_states_insert_anon" on public.shared_match_states;
+create policy "shared_match_states_insert_anon"
+on public.shared_match_states
+for insert
+to anon
+with check (true);
+
+drop policy if exists "shared_match_states_update_anon" on public.shared_match_states;
+create policy "shared_match_states_update_anon"
+on public.shared_match_states
+for update
+to anon
+using (true)
+with check (true);
+```
+
+### 2) Realtime 활성화
+
+Supabase Dashboard → `Database` → `Replication`에서 `shared_match_states` 테이블을 Realtime 대상에 추가하세요.
+
+또는 SQL로 추가할 수 있습니다.
+
+```sql
+alter publication supabase_realtime add table public.shared_match_states;
+```
+
+### 3) 앱에서 연결
+
+1. 앱 상단 동기화 패널에 `Project URL`, `Anon Key`, `Room ID` 입력
+2. `동기화 연결` 클릭
+3. 같은 `Room ID`를 입력한 사용자끼리 같은 데이터를 공유
 
 ## 로컬 실행
 

@@ -46,6 +46,31 @@
           <button id="resetBtn" class="btn btn-danger" type="button">초기화</button>
           <span id="saveStatus" class="save-status">자동 저장 준비됨</span>
         </div>
+
+        <div class="sync-panel">
+          <details class="sync-details" open>
+            <summary>Supabase 실시간 동기화</summary>
+            <div class="sync-grid">
+              <label class="field compact sync-field">
+                <span>Project URL</span>
+                <input id="supabaseUrlInput" type="url" placeholder="https://xxxx.supabase.co" />
+              </label>
+              <label class="field compact sync-field">
+                <span>Anon Key</span>
+                <input id="supabaseAnonKeyInput" type="password" placeholder="eyJhbGciOi..." />
+              </label>
+              <label class="field compact sync-field sync-room-field">
+                <span>Room ID</span>
+                <input id="syncRoomInput" type="text" placeholder="friendly-match-room" />
+              </label>
+              <div class="sync-actions">
+                <button id="connectSyncBtn" class="btn btn-primary" type="button">동기화 연결</button>
+                <button id="disconnectSyncBtn" class="btn" type="button">연결 해제</button>
+              </div>
+              <div id="syncStatus" class="sync-status">클라우드 동기화 꺼짐</div>
+            </div>
+          </details>
+        </div>
       </header>
 
       <main class="layout-grid">
@@ -181,6 +206,7 @@
       </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="app.js"></script>
   </body>
 </html>

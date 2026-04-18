@@ -3,11 +3,14 @@
 
   const STORAGE_KEY = "tennis-club-match-state-v2";
   const LEGACY_STORAGE_KEYS = ["tennis-club-match-state-v1"];
+  const SYNC_CONFIG_KEY = "tennis-club-match-sync-config-v1";
   const DEFAULT_TIME_CONFIG = {
     start: "14:00",
     end: "17:00",
     interval: 30,
   };
+  const SYNC_TABLE = "shared_match_states";
+  const DEFAULT_SYNC_ROOM_ID = "friendly-match-room";
 
   const MATCH_TYPE = {
     male: { code: "male", label: "남복" },
@@ -27,6 +30,12 @@
     importFileInput: document.getElementById("importFileInput"),
     resetBtn: document.getElementById("resetBtn"),
     saveStatus: document.getElementById("saveStatus"),
+    supabaseUrlInput: document.getElementById("supabaseUrlInput"),
+    supabaseAnonKeyInput: document.getElementById("supabaseAnonKeyInput"),
+    syncRoomInput: document.getElementById("syncRoomInput"),
+    connectSyncBtn: document.getElementById("connectSyncBtn"),
+    disconnectSyncBtn: document.getElementById("disconnectSyncBtn"),
+    syncStatus: document.getElementById("syncStatus"),
 
     addCourtBtn: document.getElementById("addCourtBtn"),
     applyTimeConfigBtn: document.getElementById("applyTimeConfigBtn"),
@@ -75,6 +84,17 @@
   let saveHintTimer = null;
   let nowLineTimer = null;
   let pendingNameToggleTimer = null;
+  let draggingSlotKey = "";
+  let suppressSlotClickUntil = 0;
+  let syncConfig = normalizeSyncConfig(loadSyncConfig());
+  let syncClient = null;
+  let syncChannel = null;
+  let syncClientId = createId("sync-client");
+  let syncPushTimer = null;
+  let syncPushInFlight = false;
+  let syncPushQueued = false;
+  let syncPullInProgress = false;
+  let syncConnected = false;
 
   init();
 
@@ -83,6 +103,10 @@
     renderAll();
     saveState(false);
     startNowLineTimer();
+    renderSyncConfigInputs();
+    renderSyncStatus("클라우드 동기화 꺼짐");
+    setSyncButtonsState(false);
+    attemptAutoConnectSync();
   }
 
   function bindGlobalEvents() {
@@ -110,6 +134,12 @@
       el.importFileInput.click();
     });
     el.importFileInput.addEventListener("change", importFromFile);
+    if (el.connectSyncBtn) {
+      el.connectSyncBtn.addEventListener("click", connectSupabaseSync);
+    }
+    if (el.disconnectSyncBtn) {
+      el.disconnectSyncBtn.addEventListener("click", disconnectSupabaseSync);
+    }
 
     el.resetBtn.addEventListener("click", () => {
       const ok = window.confirm("모든 데이터를 초기화할까요? 기존 기록은 삭제됩니다.");
@@ -340,6 +370,10 @@
       if (!slotBtn) {
         return;
       }
+      if (Date.now() < suppressSlotClickUntil) {
+        event.preventDefault();
+        return;
+      }
 
       const slotKey = slotBtn.dataset.slotKey;
       if (!slotKey) {
@@ -348,6 +382,12 @@
 
       openMatchModal(slotKey);
     });
+
+    el.scheduleTable.addEventListener("dragstart", handleScheduleDragStart);
+    el.scheduleTable.addEventListener("dragover", handleScheduleDragOver);
+    el.scheduleTable.addEventListener("dragleave", handleScheduleDragLeave);
+    el.scheduleTable.addEventListener("drop", handleScheduleDrop);
+    el.scheduleTable.addEventListener("dragend", handleScheduleDragEnd);
 
     el.matchForm.addEventListener("click", handleModalPickerClick);
     el.matchForm.addEventListener("submit", (event) => {
@@ -433,6 +473,342 @@
     renderSaveStatus();
   }
 
+  function normalizeSyncConfig(input) {
+    const source = isObject(input) ? input : {};
+    return {
+      url: String(source.url || "").trim(),
+      anonKey: String(source.anonKey || "").trim(),
+      roomId: sanitizeRoomId(source.roomId),
+      autoConnect: source.autoConnect !== false,
+    };
+  }
+
+  function sanitizeRoomId(value) {
+    const roomRaw = String(value || "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-zA-Z0-9._-]/g, "");
+    return roomRaw || DEFAULT_SYNC_ROOM_ID;
+  }
+
+  function loadSyncConfig() {
+    try {
+      const raw = window.localStorage.getItem(SYNC_CONFIG_KEY);
+      if (!raw) {
+        return null;
+      }
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveSyncConfig(config) {
+    syncConfig = normalizeSyncConfig(config);
+    window.localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(syncConfig));
+  }
+
+  function renderSyncConfigInputs() {
+    if (!el.supabaseUrlInput || !el.supabaseAnonKeyInput || !el.syncRoomInput) {
+      return;
+    }
+
+    el.supabaseUrlInput.value = syncConfig.url;
+    el.supabaseAnonKeyInput.value = syncConfig.anonKey;
+    el.syncRoomInput.value = syncConfig.roomId;
+  }
+
+  function readSyncConfigFromInputs() {
+    return normalizeSyncConfig({
+      url: String(el.supabaseUrlInput?.value || ""),
+      anonKey: String(el.supabaseAnonKeyInput?.value || ""),
+      roomId: String(el.syncRoomInput?.value || ""),
+      autoConnect: true,
+    });
+  }
+
+  function hasSyncCredentials(config) {
+    return !!(config.url && config.anonKey && config.roomId);
+  }
+
+  function renderSyncStatus(message, { error = false } = {}) {
+    if (!el.syncStatus) {
+      return;
+    }
+    el.syncStatus.textContent = message;
+    el.syncStatus.style.color = error ? "#b13650" : "#4e6257";
+  }
+
+  function setSyncButtonsState(connecting) {
+    if (!el.connectSyncBtn || !el.disconnectSyncBtn) {
+      return;
+    }
+
+    el.connectSyncBtn.disabled = !!connecting || syncConnected;
+    el.disconnectSyncBtn.disabled = !!connecting || !syncConnected;
+  }
+
+  function attemptAutoConnectSync() {
+    if (!syncConfig.autoConnect || !hasSyncCredentials(syncConfig)) {
+      return;
+    }
+    connectSupabaseSync({ silent: true });
+  }
+
+  async function connectSupabaseSync({ silent = false } = {}) {
+    const nextConfig = readSyncConfigFromInputs();
+    saveSyncConfig(nextConfig);
+    renderSyncConfigInputs();
+
+    if (!hasSyncCredentials(syncConfig)) {
+      renderSyncStatus("Project URL, Anon Key, Room ID를 모두 입력해 주세요.", { error: true });
+      return;
+    }
+
+    const createClient = window.supabase?.createClient;
+    if (typeof createClient !== "function") {
+      renderSyncStatus("Supabase SDK 로드 실패. 새로고침 후 다시 시도해 주세요.", { error: true });
+      return;
+    }
+
+    setSyncButtonsState(true);
+    renderSyncStatus("클라우드 동기화 연결 중...");
+
+    await disconnectSupabaseSync({ keepStatus: true, keepConfig: true });
+
+    try {
+      syncClient = createClient(syncConfig.url, syncConfig.anonKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+        },
+      });
+      syncConnected = true;
+
+      const remoteRow = await fetchRemoteSyncRow();
+      if (remoteRow?.payload && shouldApplyRemoteState(remoteRow.payload, remoteRow.updated_at)) {
+        applyRemoteState(remoteRow.payload, { source: "초기 동기화" });
+      } else {
+        await pushStateToCloud({ immediate: true });
+      }
+
+      subscribeSyncChannel();
+      renderSyncStatus(`클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`);
+    } catch (error) {
+      syncConnected = false;
+      syncClient = null;
+      renderSyncStatus(`동기화 연결 실패: ${formatErrorMessage(error)}`, { error: true });
+      if (!silent) {
+        window.console.error(error);
+      }
+    } finally {
+      setSyncButtonsState(false);
+    }
+  }
+
+  async function disconnectSupabaseSync({ keepStatus = false, keepConfig = false } = {}) {
+    if (syncPushTimer) {
+      window.clearTimeout(syncPushTimer);
+      syncPushTimer = null;
+    }
+    syncPushInFlight = false;
+    syncPushQueued = false;
+
+    if (syncChannel && typeof syncChannel.unsubscribe === "function") {
+      try {
+        await syncChannel.unsubscribe();
+      } catch (error) {
+        window.console.warn(error);
+      }
+    }
+    syncChannel = null;
+
+    if (syncClient && typeof syncClient.removeAllChannels === "function") {
+      try {
+        syncClient.removeAllChannels();
+      } catch (error) {
+        window.console.warn(error);
+      }
+    }
+    syncClient = null;
+    syncConnected = false;
+
+    if (!keepConfig) {
+      saveSyncConfig({ ...syncConfig, autoConnect: false });
+    }
+
+    if (!keepStatus) {
+      renderSyncStatus("클라우드 동기화 꺼짐");
+    }
+  }
+
+  async function fetchRemoteSyncRow() {
+    if (!syncClient) {
+      return null;
+    }
+
+    const { data, error } = await syncClient
+      .from(SYNC_TABLE)
+      .select("room_id,payload,updated_at,updated_by")
+      .eq("room_id", syncConfig.roomId)
+      .maybeSingle();
+
+    if (error) {
+      throw error;
+    }
+
+    return data || null;
+  }
+
+  function shouldApplyRemoteState(remotePayload, remoteUpdatedAt) {
+    const remoteState = normalizeState(remotePayload);
+    const remoteMs = toTimestampMs(remoteUpdatedAt || remoteState.updatedAt);
+    const localMs = toTimestampMs(state.updatedAt);
+
+    if (remoteMs === null) {
+      return true;
+    }
+    if (localMs === null) {
+      return true;
+    }
+    return remoteMs >= localMs;
+  }
+
+  function applyRemoteState(remotePayload, { source = "원격 변경" } = {}) {
+    syncPullInProgress = true;
+    state = normalizeState(remotePayload);
+    editingPlayer = null;
+    playerSortState = [defaultPlayerSort(), defaultPlayerSort()];
+    renderAll();
+    saveState(false);
+    syncPullInProgress = false;
+    renderSyncStatus(`클라우드 변경 반영됨 (${source})`);
+  }
+
+  function subscribeSyncChannel() {
+    if (!syncClient) {
+      return;
+    }
+
+    syncChannel = syncClient
+      .channel(`sync-room-${syncConfig.roomId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: SYNC_TABLE,
+          filter: `room_id=eq.${syncConfig.roomId}`,
+        },
+        (payload) => {
+          const nextRow = payload.new;
+          if (!isObject(nextRow) || !isObject(nextRow.payload)) {
+            return;
+          }
+          if (nextRow.updated_by === syncClientId) {
+            return;
+          }
+          if (!shouldApplyRemoteState(nextRow.payload, nextRow.updated_at)) {
+            return;
+          }
+          applyRemoteState(nextRow.payload, { source: "실시간" });
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          renderSyncStatus(`클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`);
+          return;
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          renderSyncStatus(`실시간 동기화 채널 오류 (${status})`, { error: true });
+        }
+      });
+  }
+
+  function queueSyncPush({ immediate = false } = {}) {
+    if (!syncConnected || !syncClient || syncPullInProgress) {
+      return;
+    }
+
+    if (immediate) {
+      pushStateToCloud({ immediate: true });
+      return;
+    }
+
+    window.clearTimeout(syncPushTimer);
+    syncPushTimer = window.setTimeout(() => {
+      pushStateToCloud({ immediate: false });
+    }, 700);
+  }
+
+  async function pushStateToCloud({ immediate = false } = {}) {
+    if (!syncConnected || !syncClient || syncPullInProgress) {
+      return;
+    }
+
+    if (syncPushInFlight) {
+      syncPushQueued = true;
+      return;
+    }
+
+    syncPushInFlight = true;
+    window.clearTimeout(syncPushTimer);
+    syncPushTimer = null;
+
+    try {
+      const row = {
+        room_id: syncConfig.roomId,
+        payload: state,
+        updated_by: syncClientId,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await syncClient.from(SYNC_TABLE).upsert(row, { onConflict: "room_id" });
+      if (error) {
+        throw error;
+      }
+
+      if (immediate) {
+        renderSyncStatus(`클라우드 저장 완료 (${formatClockTime(new Date())})`);
+      }
+    } catch (error) {
+      renderSyncStatus(`클라우드 저장 실패: ${formatErrorMessage(error)}`, { error: true });
+    } finally {
+      syncPushInFlight = false;
+      if (syncPushQueued) {
+        syncPushQueued = false;
+        queueSyncPush({ immediate: false });
+      }
+    }
+  }
+
+  function toTimestampMs(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      return null;
+    }
+    return date.getTime();
+  }
+
+  function formatClockTime(date) {
+    return date.toLocaleTimeString("ko-KR", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function formatErrorMessage(error) {
+    if (!error) {
+      return "알 수 없는 오류";
+    }
+    if (typeof error.message === "string" && error.message) {
+      return error.message;
+    }
+    return String(error);
+  }
+
   function renderClubs() {
     const html = state.clubs
       .map((club, clubIndex) => {
@@ -440,55 +816,32 @@
         const femaleCount = club.players.filter((player) => player.gender === "F").length;
         const totalCount = club.players.length;
 
-        const playerCards = club.players
-          .map(
-            (player) => {
-              const isEditingName =
-                editingPlayer &&
-                editingPlayer.clubIndex === clubIndex &&
-                editingPlayer.playerId === player.id;
+        const groupedPlayers = groupPlayersByGenderSorted(club.players);
+        const rightSidePlayers = [...groupedPlayers.female, ...groupedPlayers.unknown];
 
-              return `
-            <div class="club-player-card ${genderClassName(player.gender)}">
-              <div class="player-name-editor">
-                ${
-                  isEditingName
-                    ? `
-                      <input
-                        class="inline-input player-name-edit-input"
-                        data-club-index="${clubIndex}"
-                        data-player-id="${escapeAttr(player.id)}"
-                        value="${escapeAttr(player.name)}"
-                        placeholder="이름"
-                      />
-                    `
-                    : `
-                      <button
-                        class="player-name-display"
-                        type="button"
-                        data-club-index="${clubIndex}"
-                        data-player-id="${escapeAttr(player.id)}"
-                        title="클릭: 성별 변경 · 더블클릭: 이름 수정"
-                      >
-                        ${escapeHtml(player.name || "이름없음")}
-                      </button>
-                    `
-                }
-                <button
-                  class="icon-danger remove-player-btn club-player-remove"
-                  type="button"
-                  data-club-index="${clubIndex}"
-                  data-player-id="${escapeAttr(player.id)}"
-                  aria-label="선수 삭제"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          `;
-            }
-          )
+        const maleCards = groupedPlayers.male
+          .map((player) => renderClubPlayerCardHtml(player, clubIndex))
           .join("");
+        const femaleCards = rightSidePlayers
+          .map((player) => renderClubPlayerCardHtml(player, clubIndex))
+          .join("");
+
+        const playerCards = totalCount
+          ? `
+              <div class="club-player-columns">
+                ${renderGenderColumnHtml({
+                  columnClass: "gender-m",
+                  icon: "♂",
+                  cardsHtml: maleCards,
+                })}
+                ${renderGenderColumnHtml({
+                  columnClass: "gender-f",
+                  icon: "♀",
+                  cardsHtml: femaleCards,
+                })}
+              </div>
+            `
+          : `<div class="empty-note">등록된 선수가 없습니다.</div>`;
 
         return `
           <article class="club-card">
@@ -533,12 +886,7 @@
               </div>
             </form>
 
-            <div class="club-player-box ${playerCards ? "" : "empty"}">
-              ${
-                playerCards ||
-                `<div class="empty-note">등록된 선수가 없습니다.</div>`
-              }
-            </div>
+            <div class="club-player-box ${totalCount ? "" : "empty"}">${playerCards}</div>
           </article>
         `;
       })
@@ -546,6 +894,109 @@
 
     el.clubsContainer.innerHTML = html;
     focusEditingPlayerInput();
+  }
+
+  function renderClubPlayerCardHtml(player, clubIndex) {
+    const isEditingName =
+      editingPlayer &&
+      editingPlayer.clubIndex === clubIndex &&
+      editingPlayer.playerId === player.id;
+
+    return `
+      <div class="club-player-card ${genderClassName(player.gender)}">
+        <div class="player-name-editor">
+          ${
+            isEditingName
+              ? `
+                <input
+                  class="inline-input player-name-edit-input"
+                  data-club-index="${clubIndex}"
+                  data-player-id="${escapeAttr(player.id)}"
+                  value="${escapeAttr(player.name)}"
+                  placeholder="이름"
+                />
+              `
+              : `
+                <button
+                  class="player-name-display"
+                  type="button"
+                  data-club-index="${clubIndex}"
+                  data-player-id="${escapeAttr(player.id)}"
+                  title="클릭: 성별 변경 · 더블클릭: 이름 수정"
+                >
+                  ${escapeHtml(player.name || "이름없음")}
+                </button>
+              `
+          }
+          <button
+            class="icon-danger remove-player-btn club-player-remove"
+            type="button"
+            data-club-index="${clubIndex}"
+            data-player-id="${escapeAttr(player.id)}"
+            aria-label="선수 삭제"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderGenderColumnHtml({ columnClass, icon, cardsHtml }) {
+    return `
+      <div class="player-list-column ${escapeAttr(columnClass)}">
+        <div class="player-list-head" aria-hidden="true">
+          <span class="player-list-gender-icon">${escapeHtml(icon)}</span>
+        </div>
+        <div class="player-list-stack ${cardsHtml ? "" : "empty"}">
+          ${cardsHtml || `<span class="player-list-empty">없음</span>`}
+        </div>
+      </div>
+    `;
+  }
+
+  function comparePlayerNameAsc(left, right) {
+    const leftName = String(left?.name || "").trim();
+    const rightName = String(right?.name || "").trim();
+    const byName = leftName.localeCompare(rightName, "ko-KR", {
+      sensitivity: "base",
+      numeric: true,
+    });
+    if (byName !== 0) {
+      return byName;
+    }
+
+    const leftId = String(left?.id || "");
+    const rightId = String(right?.id || "");
+    return leftId.localeCompare(rightId);
+  }
+
+  function sortPlayersByName(players) {
+    return [...players].sort(comparePlayerNameAsc);
+  }
+
+  function groupPlayersByGenderSorted(players) {
+    const male = [];
+    const female = [];
+    const unknown = [];
+
+    players.forEach((player) => {
+      if (player.gender === "M") {
+        male.push(player);
+        return;
+      }
+      if (player.gender === "F") {
+        female.push(player);
+        return;
+      }
+      unknown.push(player);
+    });
+
+    return {
+      male: sortPlayersByName(male),
+      female: sortPlayersByName(female),
+      unknown: sortPlayersByName(unknown),
+    };
   }
 
   function renderGenderToggleHtml({
@@ -746,6 +1197,140 @@
     saveState(false);
   }
 
+  function handleScheduleDragStart(event) {
+    const slotBtn = event.target.closest(".slot-btn.filled");
+    if (!slotBtn) {
+      return;
+    }
+
+    const slotKey = String(slotBtn.dataset.slotKey || "");
+    if (!slotKey || !state.matches[slotKey]) {
+      return;
+    }
+
+    draggingSlotKey = slotKey;
+    slotBtn.classList.add("dragging");
+
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", slotKey);
+    }
+  }
+
+  function handleScheduleDragOver(event) {
+    if (!draggingSlotKey) {
+      return;
+    }
+
+    const slotBtn = event.target.closest(".slot-btn");
+    if (!slotBtn) {
+      return;
+    }
+
+    const targetSlotKey = String(slotBtn.dataset.slotKey || "");
+    if (!targetSlotKey || targetSlotKey === draggingSlotKey) {
+      clearScheduleDropTargets();
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+
+    clearScheduleDropTargets(slotBtn);
+    slotBtn.classList.add("drop-target");
+  }
+
+  function handleScheduleDragLeave(event) {
+    if (!draggingSlotKey) {
+      return;
+    }
+
+    const slotBtn = event.target.closest(".slot-btn.drop-target");
+    if (!slotBtn) {
+      return;
+    }
+
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && slotBtn.contains(nextTarget)) {
+      return;
+    }
+
+    slotBtn.classList.remove("drop-target");
+  }
+
+  function handleScheduleDrop(event) {
+    if (!draggingSlotKey) {
+      return;
+    }
+
+    const slotBtn = event.target.closest(".slot-btn");
+    if (!slotBtn) {
+      return;
+    }
+
+    const targetSlotKey = String(slotBtn.dataset.slotKey || "");
+    if (!targetSlotKey) {
+      return;
+    }
+
+    event.preventDefault();
+    clearScheduleDropTargets();
+
+    if (targetSlotKey === draggingSlotKey) {
+      return;
+    }
+
+    moveOrSwapMatchSlot(draggingSlotKey, targetSlotKey);
+    suppressSlotClickUntil = Date.now() + 260;
+  }
+
+  function handleScheduleDragEnd() {
+    clearScheduleDropTargets();
+
+    const draggingBtn = el.scheduleTable.querySelector(".slot-btn.dragging");
+    if (draggingBtn) {
+      draggingBtn.classList.remove("dragging");
+    }
+
+    draggingSlotKey = "";
+  }
+
+  function clearScheduleDropTargets(keepButton = null) {
+    const targets = el.scheduleTable.querySelectorAll(".slot-btn.drop-target");
+    targets.forEach((button) => {
+      if (keepButton && button === keepButton) {
+        return;
+      }
+      button.classList.remove("drop-target");
+    });
+  }
+
+  function moveOrSwapMatchSlot(sourceSlotKey, targetSlotKey) {
+    if (!sourceSlotKey || !targetSlotKey || sourceSlotKey === targetSlotKey) {
+      return;
+    }
+
+    const sourceMatch = state.matches[sourceSlotKey];
+    if (!sourceMatch) {
+      return;
+    }
+
+    const targetMatch = state.matches[targetSlotKey];
+    if (targetMatch) {
+      state.matches[targetSlotKey] = sourceMatch;
+      state.matches[sourceSlotKey] = targetMatch;
+    } else {
+      state.matches[targetSlotKey] = sourceMatch;
+      delete state.matches[sourceSlotKey];
+    }
+
+    renderSchedule();
+    renderStats();
+    saveState(false);
+  }
+
   function renderSchedule() {
     const canDeleteCourt = state.courts.length > 1;
 
@@ -806,6 +1391,8 @@
                   class="slot-btn filled type-${type.code}"
                   type="button"
                   data-slot-key="${escapeAttr(slotKey)}"
+                  draggable="true"
+                  title="드래그로 경기 이동"
                 >
                   <div class="slot-inner">
                     <div class="slot-side">
@@ -1105,7 +1692,37 @@
         .join("");
     }
 
-    const poolHtml = state.clubs[clubIndex].players
+    const groupedPlayers = groupPlayersByGenderSorted(state.clubs[clubIndex].players);
+    const rightSidePlayers = [...groupedPlayers.female, ...groupedPlayers.unknown];
+    const hasAnyPlayer = groupedPlayers.male.length + rightSidePlayers.length > 0;
+
+    if (!hasAnyPlayer) {
+      poolEl.innerHTML = `<div class="empty-note">등록된 선수가 없습니다.</div>`;
+      return;
+    }
+
+    poolEl.innerHTML = `
+      <div class="player-pool-columns">
+        ${renderPoolGenderColumnHtml({
+          players: groupedPlayers.male,
+          selected,
+          clubIndex,
+          columnClass: "gender-m",
+          icon: "♂",
+        })}
+        ${renderPoolGenderColumnHtml({
+          players: rightSidePlayers,
+          selected,
+          clubIndex,
+          columnClass: "gender-f",
+          icon: "♀",
+        })}
+      </div>
+    `;
+  }
+
+  function renderPoolGenderColumnHtml({ players, selected, clubIndex, columnClass, icon }) {
+    const buttonHtml = players
       .map((player) => {
         const isSelected = selected.includes(player.id);
 
@@ -1124,7 +1741,16 @@
       })
       .join("");
 
-    poolEl.innerHTML = poolHtml || `<div class="empty-note">등록된 선수가 없습니다.</div>`;
+    return `
+      <div class="pool-column ${escapeAttr(columnClass)}">
+        <div class="pool-column-head" aria-hidden="true">
+          <span class="pool-column-icon">${escapeHtml(icon)}</span>
+        </div>
+        <div class="pool-column-list ${buttonHtml ? "" : "empty"}">
+          ${buttonHtml || `<span class="pool-column-empty">없음</span>`}
+        </div>
+      </div>
+    `;
   }
 
   function saveMatchFromModal() {
@@ -1763,6 +2389,9 @@
   function saveState(showMessage) {
     state.updatedAt = new Date().toISOString();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (syncConnected && !syncPullInProgress) {
+      queueSyncPush({ immediate: !!showMessage });
+    }
 
     if (showMessage) {
       renderSaveStatus("저장 완료");
