@@ -245,6 +245,26 @@ body {
   border-color: var(--primary-dark);
 }
 
+.btn-share {
+  border-color: #3b7de9;
+  color: #114ca8;
+  background: linear-gradient(140deg, #e9f2ff, #dbe9ff);
+}
+
+.btn-share:hover {
+  border-color: #245fc4;
+}
+
+.btn-share-alt {
+  border-color: #9f6bff;
+  color: #5a2bb6;
+  background: linear-gradient(140deg, #f3edff, #e8dcff);
+}
+
+.btn-share-alt:hover {
+  border-color: #7e49df;
+}
+
 .btn-danger {
   border-color: #eb8d8d;
   background: #fff7f7;

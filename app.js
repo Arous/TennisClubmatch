@@ -28,6 +28,8 @@
     matchDateInput: document.getElementById("matchDateInput"),
     matchLocationInput: document.getElementById("matchLocationInput"),
     saveNowBtn: document.getElementById("saveNowBtn"),
+    shareMatchPosterBtn: document.getElementById("shareMatchPosterBtn"),
+    shareStatsPosterBtn: document.getElementById("shareStatsPosterBtn"),
     exportBtn: document.getElementById("exportBtn"),
     importBtn: document.getElementById("importBtn"),
     importFileInput: document.getElementById("importFileInput"),
@@ -153,6 +155,9 @@
         saveMessage: allowCloudSync ? "저장 완료" : "로컬 저장 완료 (클라우드 미반영)",
       });
     });
+
+    el.shareMatchPosterBtn.addEventListener("click", shareMatchPoster);
+    el.shareStatsPosterBtn.addEventListener("click", shareStatsPoster);
 
     el.exportBtn.addEventListener("click", downloadAutoBackupJson);
     el.importBtn.addEventListener("click", () => {
@@ -2781,6 +2786,689 @@
     });
 
     el.saveStatus.textContent = `자동 저장: ${stamp}`;
+  }
+
+  async function shareMatchPoster() {
+    try {
+      const canvas = createClubBattlePosterCanvas();
+      const clubAName = state.clubs[0]?.name || "클럽 1";
+      const clubBName = state.clubs[1]?.name || "클럽 2";
+      await shareOrDownloadPosterImage(canvas, {
+        filenamePrefix: "club-battle-poster",
+        title: `${clubAName} vs ${clubBName}`,
+        text: buildPosterShareText(),
+      });
+    } catch (error) {
+      window.console.error(error);
+      await appAlert("대항 포스터 생성 중 오류가 발생했습니다.", { title: "공유 오류" });
+    }
+  }
+
+  async function shareStatsPoster() {
+    try {
+      const canvas = createStatsSummaryPosterCanvas();
+      await shareOrDownloadPosterImage(canvas, {
+        filenamePrefix: "stats-summary-poster",
+        title: `${state.matchName || "교류전"} 통계 요약`,
+        text: buildPosterShareText(),
+      });
+    } catch (error) {
+      window.console.error(error);
+      await appAlert("통계 포스터 생성 중 오류가 발생했습니다.", { title: "공유 오류" });
+    }
+  }
+
+  function buildPosterShareText() {
+    const location = state.matchLocation || "장소 미정";
+    const dateText = formatPosterDateTime(state.matchDate);
+    return `${location} · ${dateText}`;
+  }
+
+  async function shareOrDownloadPosterImage(canvas, { filenamePrefix, title, text }) {
+    const blob = await canvasToPngBlob(canvas);
+    if (!blob) {
+      await appAlert("이미지 변환에 실패했습니다. 다시 시도해 주세요.", { title: "공유 오류" });
+      return;
+    }
+
+    const filename = `${filenamePrefix}-${formatFileTimestamp(new Date())}.png`;
+    const nav = window.navigator;
+    const canTryShare =
+      !!nav &&
+      typeof nav.share === "function" &&
+      typeof window.File === "function" &&
+      window.isSecureContext;
+
+    if (canTryShare) {
+      try {
+        const file = new File([blob], filename, { type: "image/png" });
+        const shareData = {
+          title: String(title || "포스터 공유"),
+          text: String(text || ""),
+          files: [file],
+        };
+        const canShareFiles = typeof nav.canShare !== "function" || nav.canShare({ files: [file] });
+        if (canShareFiles) {
+          await nav.share(shareData);
+          flashSaveStatus("포스터 공유 완료");
+          return;
+        }
+      } catch (error) {
+        if (error && error.name === "AbortError") {
+          return;
+        }
+        window.console.warn(error);
+      }
+    }
+
+    downloadBlobFile(blob, filename);
+    flashSaveStatus("포스터 다운로드 완료");
+  }
+
+  function canvasToPngBlob(canvas) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob), "image/png");
+    });
+  }
+
+  function downloadBlobFile(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function flashSaveStatus(message) {
+    renderSaveStatus(message);
+    window.clearTimeout(saveHintTimer);
+    saveHintTimer = window.setTimeout(() => renderSaveStatus(), 1400);
+  }
+
+  function createClubBattlePosterCanvas() {
+    const width = 1600;
+    const height = 900;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("2D 캔버스를 생성할 수 없습니다.");
+    }
+
+    const clubAName = state.clubs[0]?.name || "클럽 1";
+    const clubBName = state.clubs[1]?.name || "클럽 2";
+    const matchTitle = state.matchName || `${clubAName} vs ${clubBName}`;
+    const location = state.matchLocation || "테니스장 미정";
+    const dateText = formatPosterDateTime(state.matchDate);
+
+    const bg = ctx.createLinearGradient(0, 0, width, height);
+    bg.addColorStop(0, "#0f2d44");
+    bg.addColorStop(0.45, "#183f5f");
+    bg.addColorStop(1, "#0f2a3e");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+
+    const leftGlow = ctx.createRadialGradient(width * 0.2, height * 0.42, 50, width * 0.2, height * 0.42, 360);
+    leftGlow.addColorStop(0, "rgba(42, 142, 255, 0.38)");
+    leftGlow.addColorStop(1, "rgba(42, 142, 255, 0)");
+    ctx.fillStyle = leftGlow;
+    ctx.fillRect(0, 0, width, height);
+
+    const rightGlow = ctx.createRadialGradient(width * 0.8, height * 0.42, 50, width * 0.8, height * 0.42, 360);
+    rightGlow.addColorStop(0, "rgba(255, 121, 93, 0.34)");
+    rightGlow.addColorStop(1, "rgba(255, 121, 93, 0)");
+    ctx.fillStyle = rightGlow;
+    ctx.fillRect(0, 0, width, height);
+
+    const centerGlow = ctx.createRadialGradient(width / 2, height / 2, 80, width / 2, height / 2, 280);
+    centerGlow.addColorStop(0, "rgba(255, 255, 255, 0.82)");
+    centerGlow.addColorStop(0.5, "rgba(224, 245, 255, 0.34)");
+    centerGlow.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = centerGlow;
+    ctx.fillRect(0, 0, width, height);
+
+    drawFittedText(ctx, {
+      text: matchTitle,
+      x: width / 2,
+      y: 95,
+      maxWidth: width * 0.84,
+      maxSize: 64,
+      minSize: 28,
+      weight: 800,
+      color: "#f5fcff",
+      align: "center",
+    });
+
+    drawFittedText(ctx, {
+      text: clubAName,
+      x: 260,
+      y: 186,
+      maxWidth: 460,
+      maxSize: 78,
+      minSize: 34,
+      weight: 900,
+      color: "#e8f4ff",
+      align: "center",
+    });
+    drawFittedText(ctx, {
+      text: clubBName,
+      x: width - 260,
+      y: 186,
+      maxWidth: 460,
+      maxSize: 78,
+      minSize: 34,
+      weight: 900,
+      color: "#fff2e8",
+      align: "center",
+    });
+
+    const leftPanel = { x: 46, y: 218, w: 430, h: 628 };
+    const rightPanel = { x: width - 476, y: 218, w: 430, h: 628 };
+    drawPanel(ctx, leftPanel, {
+      fill: "rgba(10, 35, 57, 0.5)",
+      border: "rgba(129, 191, 255, 0.35)",
+    });
+    drawPanel(ctx, rightPanel, {
+      fill: "rgba(56, 31, 16, 0.48)",
+      border: "rgba(255, 183, 142, 0.35)",
+    });
+
+    drawPlayerTagGrid(ctx, getClubPlayersForPoster(0), leftPanel, "left");
+    drawPlayerTagGrid(ctx, getClubPlayersForPoster(1), rightPanel, "right");
+
+    drawVsEmblem(ctx, width / 2, height / 2 - 24, 124);
+
+    drawPanel(
+      ctx,
+      { x: width / 2 - 270, y: height / 2 + 118, w: 540, h: 194 },
+      { fill: "rgba(12, 28, 41, 0.62)", border: "rgba(205, 230, 246, 0.48)" }
+    );
+
+    drawFittedText(ctx, {
+      text: location,
+      x: width / 2,
+      y: height / 2 + 194,
+      maxWidth: 500,
+      maxSize: 42,
+      minSize: 23,
+      weight: 800,
+      color: "#eff8ff",
+    });
+    drawFittedText(ctx, {
+      text: dateText,
+      x: width / 2,
+      y: height / 2 + 248,
+      maxWidth: 500,
+      maxSize: 30,
+      minSize: 18,
+      weight: 600,
+      color: "#b9d4e6",
+    });
+
+    return canvas;
+  }
+
+  function createStatsSummaryPosterCanvas() {
+    const width = 1200;
+    const height = 1600;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("2D 캔버스를 생성할 수 없습니다.");
+    }
+
+    const stats = computeStats();
+    const summary = collectCompletedMatchSummary();
+    const clubAName = state.clubs[0]?.name || "클럽 1";
+    const clubBName = state.clubs[1]?.name || "클럽 2";
+    const clubA = stats.clubStats[0];
+    const clubB = stats.clubStats[1];
+    const mvpA = pickClubMvp(stats.players, 0);
+    const mvpB = pickClubMvp(stats.players, 1);
+
+    const bg = ctx.createLinearGradient(0, 0, 0, height);
+    bg.addColorStop(0, "#f3fff8");
+    bg.addColorStop(1, "#e6f4ec");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+
+    drawPanel(ctx, { x: 30, y: 26, w: width - 60, h: 188 }, { fill: "rgba(16, 71, 48, 0.92)", border: "rgba(88, 167, 126, 0.6)" });
+    drawFittedText(ctx, {
+      text: state.matchName || `${clubAName} vs ${clubBName}`,
+      x: width / 2,
+      y: 124,
+      maxWidth: width - 220,
+      maxSize: 30,
+      minSize: 18,
+      weight: 600,
+      color: "#c7edd9",
+    });
+
+    drawPanel(ctx, { x: 48, y: 236, w: width - 96, h: 204 }, { fill: "#ffffff", border: "rgba(160, 205, 179, 0.66)" });
+    drawFittedText(ctx, {
+      text: `${clubAName}  ${clubA.wins} : ${clubB.wins}  ${clubBName}`,
+      x: width / 2,
+      y: 324,
+      maxWidth: width - 180,
+      maxSize: 56,
+      minSize: 24,
+      weight: 900,
+      color: "#123f2e",
+    });
+    drawFittedText(ctx, {
+      text: `총 ${summary.totalMatches}경기 · 총 게임수 ${summary.totalGames} · 무승부 ${clubA.draws}`,
+      x: width / 2,
+      y: 378,
+      maxWidth: width - 220,
+      maxSize: 28,
+      minSize: 17,
+      weight: 600,
+      color: "#3d6654",
+    });
+
+    const cardY = 470;
+    drawPanel(ctx, { x: 48, y: cardY, w: 530, h: 248 }, { fill: "#ffffff", border: "rgba(133, 182, 255, 0.66)" });
+    drawPanel(ctx, { x: 622, y: cardY, w: 530, h: 248 }, { fill: "#ffffff", border: "rgba(255, 170, 141, 0.68)" });
+    drawFittedText(ctx, { text: `${clubAName} 팀 요약`, x: 313, y: 528, maxWidth: 470, maxSize: 36, minSize: 20, weight: 800, color: "#1f4d87" });
+    drawFittedText(ctx, { text: `${clubBName} 팀 요약`, x: 887, y: 528, maxWidth: 470, maxSize: 36, minSize: 20, weight: 800, color: "#8d4a23" });
+    drawStatLine(ctx, 96, 572, `전적 ${clubA.wins}승 ${clubA.losses}패 ${clubA.draws}무`, "#194577");
+    drawStatLine(ctx, 96, 616, `게임 ${clubA.gamesFor}득점 / ${clubA.gamesAgainst}실점`, "#194577");
+    drawStatLine(ctx, 96, 660, `득실차 ${formatSigned(clubA.diff)}`, "#194577");
+    drawStatLine(ctx, 670, 572, `전적 ${clubB.wins}승 ${clubB.losses}패 ${clubB.draws}무`, "#8d4a23");
+    drawStatLine(ctx, 670, 616, `게임 ${clubB.gamesFor}득점 / ${clubB.gamesAgainst}실점`, "#8d4a23");
+    drawStatLine(ctx, 670, 660, `득실차 ${formatSigned(clubB.diff)}`, "#8d4a23");
+
+    drawPanel(ctx, { x: 48, y: 742, w: 530, h: 220 }, { fill: "#ffffff", border: "rgba(148, 199, 174, 0.65)" });
+    drawPanel(ctx, { x: 622, y: 742, w: 530, h: 220 }, { fill: "#ffffff", border: "rgba(148, 199, 174, 0.65)" });
+    drawFittedText(ctx, { text: `${clubAName} MVP`, x: 313, y: 798, maxWidth: 470, maxSize: 32, minSize: 20, weight: 800, color: "#145b41" });
+    drawFittedText(ctx, { text: `${clubBName} MVP`, x: 887, y: 798, maxWidth: 470, maxSize: 32, minSize: 20, weight: 800, color: "#145b41" });
+    drawMvpBlock(ctx, 313, 878, mvpA);
+    drawMvpBlock(ctx, 887, 878, mvpB);
+
+    drawPanel(ctx, { x: 48, y: 986, w: width - 96, h: 230 }, { fill: "#ffffff", border: "rgba(151, 191, 166, 0.66)" });
+    drawFittedText(ctx, { text: "경기 유형 분포", x: 140, y: 1038, maxWidth: 210, maxSize: 26, minSize: 18, weight: 800, color: "#255941", align: "left" });
+    drawTypeDistributionChart(ctx, summary.typeCounts, 90, 1066, width - 180, 126);
+
+    drawPanel(ctx, { x: 48, y: 1240, w: width - 96, h: 316 }, { fill: "#ffffff", border: "rgba(151, 191, 166, 0.66)" });
+    drawFittedText(ctx, { text: "시간 흐름 요약", x: 136, y: 1292, maxWidth: 230, maxSize: 26, minSize: 18, weight: 800, color: "#255941", align: "left" });
+    drawPosterTrendChart(ctx, stats.trendSeries, 90, 1320, width - 180, 198);
+
+    drawFittedText(ctx, {
+      text: `${state.matchLocation || "장소 미정"} · ${formatPosterDateTime(state.matchDate)}`,
+      x: width / 2,
+      y: height - 28,
+      maxWidth: width - 140,
+      maxSize: 24,
+      minSize: 14,
+      weight: 600,
+      color: "#3e6655",
+    });
+
+    return canvas;
+  }
+
+  function collectCompletedMatchSummary() {
+    const typeCounts = { male: 0, female: 0, mixed: 0, open: 0, pending: 0 };
+    let totalMatches = 0;
+    let totalGames = 0;
+
+    state.times.forEach((timeLabel, timeIndex) => {
+      state.courts.forEach((court) => {
+        const slotKey = makeSlotKey(timeIndex, court.id);
+        const match = state.matches[slotKey];
+        if (!match || !isCompletedScore(match)) {
+          return;
+        }
+        totalMatches += 1;
+        totalGames += toSafeNumber(match.scoreA) + toSafeNumber(match.scoreB);
+        const code = getMatchType(match).code;
+        if (Object.prototype.hasOwnProperty.call(typeCounts, code)) {
+          typeCounts[code] += 1;
+        }
+      });
+    });
+
+    return { totalMatches, totalGames, typeCounts };
+  }
+
+  function pickClubMvp(players, clubIndex) {
+    const candidates = players
+      .filter((item) => item.clubIndex === clubIndex && item.played > 0)
+      .sort(
+        (a, b) =>
+          b.wins - a.wins ||
+          b.winRate - a.winRate ||
+          b.played - a.played ||
+          a.name.localeCompare(b.name, "ko-KR", { sensitivity: "base", numeric: true })
+      );
+    return candidates[0] || null;
+  }
+
+  function drawMvpBlock(ctx, x, y, mvp) {
+    if (!mvp) {
+      drawFittedText(ctx, {
+        text: "아직 결과 데이터가 없습니다.",
+        x,
+        y,
+        maxWidth: 450,
+        maxSize: 26,
+        minSize: 15,
+        weight: 600,
+        color: "#567a69",
+      });
+      return;
+    }
+
+    const genderMark = mvp.gender === "F" ? "♀" : "♂";
+    drawFittedText(ctx, {
+      text: `${genderMark} ${mvp.name}`,
+      x,
+      y,
+      maxWidth: 420,
+      maxSize: 42,
+      minSize: 20,
+      weight: 900,
+      color: mvp.gender === "F" ? "#d1466a" : "#256ad6",
+    });
+    drawFittedText(ctx, {
+      text: `${mvp.wins}승 ${mvp.losses}패 · 승률 ${mvp.winRate.toFixed(1)}%`,
+      x,
+      y: y + 44,
+      maxWidth: 420,
+      maxSize: 24,
+      minSize: 14,
+      weight: 600,
+      color: "#3b5d4e",
+    });
+  }
+
+  function drawTypeDistributionChart(ctx, typeCounts, x, y, width, height) {
+    const items = [
+      { key: "male", label: "남복", color: "#2f79ff" },
+      { key: "female", label: "여복", color: "#e54f6c" },
+      { key: "mixed", label: "혼복", color: "#f09f3d" },
+      { key: "open", label: "잡복", color: "#43b97a" },
+    ];
+    const maxCount = Math.max(1, ...items.map((item) => Number(typeCounts[item.key] || 0)));
+    const barAreaHeight = height - 36;
+    const barWidth = Math.floor((width - 40) / items.length);
+
+    items.forEach((item, index) => {
+      const value = Number(typeCounts[item.key] || 0);
+      const barHeight = Math.round((value / maxCount) * (barAreaHeight - 12));
+      const bx = x + 12 + index * barWidth;
+      const by = y + barAreaHeight - barHeight;
+      drawPanel(ctx, { x: bx, y: by, w: barWidth - 18, h: barHeight }, { fill: item.color, border: item.color, radius: 14 });
+
+      ctx.fillStyle = "#305346";
+      ctx.font = "700 20px SUIT, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(item.label, bx + (barWidth - 18) / 2, y + height);
+      ctx.fillStyle = "#163b2c";
+      ctx.font = "800 24px SUIT, sans-serif";
+      ctx.fillText(String(value), bx + (barWidth - 18) / 2, by - 10);
+    });
+  }
+
+  function drawPosterTrendChart(ctx, trendSeries, x, y, width, height) {
+    drawPanel(ctx, { x, y, w: width, h: height }, { fill: "#f6fef9", border: "rgba(132, 184, 158, 0.55)", radius: 16 });
+    if (!Array.isArray(trendSeries) || trendSeries.length <= 1) {
+      drawFittedText(ctx, {
+        text: "아직 점수 입력 데이터가 없습니다.",
+        x: x + width / 2,
+        y: y + height / 2 + 8,
+        maxWidth: width - 40,
+        maxSize: 26,
+        minSize: 14,
+        weight: 600,
+        color: "#5c7b6d",
+      });
+      return;
+    }
+
+    const innerX = x + 20;
+    const innerY = y + 20;
+    const innerW = width - 40;
+    const innerH = height - 40;
+    const centerY = innerY + innerH / 2;
+    const maxAbs = Math.max(
+      1,
+      ...trendSeries.map((point) => Math.abs(point.matchDelta)),
+      ...trendSeries.map((point) => Math.abs(point.gameDelta))
+    );
+    const xStep = trendSeries.length > 1 ? innerW / (trendSeries.length - 1) : 0;
+    const yScale = (innerH / 2 - 12) / maxAbs;
+    const toX = (index) => innerX + index * xStep;
+    const toY = (value) => centerY - value * yScale;
+
+    ctx.strokeStyle = "rgba(75, 123, 103, 0.32)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(innerX, centerY);
+    ctx.lineTo(innerX + innerW, centerY);
+    ctx.stroke();
+
+    const drawTrendLine = (pickValue, color, lineWidth) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.beginPath();
+      trendSeries.forEach((point, index) => {
+        const px = toX(index);
+        const py = toY(pickValue(point));
+        if (index === 0) {
+          ctx.moveTo(px, py);
+        } else {
+          ctx.lineTo(px, py);
+        }
+      });
+      ctx.stroke();
+    };
+
+    drawTrendLine((point) => point.matchDelta, "#1d78ff", 4);
+    drawTrendLine((point) => point.gameDelta, "#27aa62", 3);
+
+    const last = trendSeries[trendSeries.length - 1];
+    drawFittedText(ctx, {
+      text: `승패차 ${formatSigned(last.matchDelta)} · 득실차 ${formatSigned(last.gameDelta)}`,
+      x: x + width - 22,
+      y: y + 34,
+      maxWidth: width - 120,
+      maxSize: 20,
+      minSize: 13,
+      weight: 700,
+      color: "#2b5543",
+      align: "right",
+    });
+  }
+
+  function getClubPlayersForPoster(clubIndex) {
+    const players = sortPlayersByName(state.clubs[clubIndex]?.players || []);
+    return players.map((player) => ({
+      name: player.name || "이름없음",
+      gender: player.gender || "",
+    }));
+  }
+
+  function drawPlayerTagGrid(ctx, players, panel, side) {
+    const list = players.length ? players : [{ name: "선수 미등록", gender: "" }];
+    const gap = 10;
+    const columns = 2;
+    const chipWidth = Math.floor((panel.w - 24 - gap) / columns);
+    const chipHeight = 42;
+    const rows = Math.max(1, Math.floor((panel.h - 26) / (chipHeight + gap)));
+    const maxItems = rows * columns;
+    const visible = list.slice(0, maxItems);
+    const overflow = list.length - visible.length;
+
+    visible.forEach((item, index) => {
+      const row = Math.floor(index / columns);
+      const col = index % columns;
+      const x = panel.x + 12 + col * (chipWidth + gap);
+      const y = panel.y + 12 + row * (chipHeight + gap);
+      const chipColor =
+        item.gender === "F"
+          ? "rgba(255, 95, 133, 0.26)"
+          : item.gender === "M"
+            ? "rgba(79, 160, 255, 0.28)"
+            : "rgba(215, 236, 255, 0.24)";
+      const borderColor = side === "left" ? "rgba(140, 201, 255, 0.38)" : "rgba(255, 191, 147, 0.4)";
+      drawPanel(ctx, { x, y, w: chipWidth, h: chipHeight }, { fill: chipColor, border: borderColor, radius: 12 });
+      drawFittedText(ctx, {
+        text: item.name,
+        x: x + chipWidth / 2,
+        y: y + 28,
+        maxWidth: chipWidth - 14,
+        maxSize: 21,
+        minSize: 12,
+        weight: 700,
+        color: "#f2f9ff",
+      });
+    });
+
+    if (overflow > 0) {
+      drawFittedText(ctx, {
+        text: `+${overflow}명`,
+        x: panel.x + panel.w / 2,
+        y: panel.y + panel.h - 10,
+        maxWidth: panel.w - 20,
+        maxSize: 20,
+        minSize: 12,
+        weight: 700,
+        color: "#c6dbeb",
+      });
+    }
+  }
+
+  function drawVsEmblem(ctx, x, y, radius) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    const ring = ctx.createLinearGradient(-radius, -radius, radius, radius);
+    ring.addColorStop(0, "#2d9dff");
+    ring.addColorStop(1, "#7d43ff");
+
+    ctx.fillStyle = "rgba(248, 253, 255, 0.95)";
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = ring;
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.arc(0, 0, radius - 12, 0.22, Math.PI * 2 - 0.22);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(66, 134, 255, 0.78)";
+    ctx.lineWidth = 11;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.arc(-24, -2, 44, 1.2, 4.95);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(132, 65, 255, 0.78)";
+    ctx.beginPath();
+    ctx.arc(24, -2, 44, -1.8, 1.95);
+    ctx.stroke();
+
+    ctx.fillStyle = "#172c3f";
+    ctx.font = "900 70px SUIT, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("VS", 0, 2);
+
+    ctx.restore();
+  }
+
+  function drawPanel(ctx, { x, y, w, h }, { fill, border, radius = 18 }) {
+    drawRoundedRectPath(ctx, x, y, w, h, radius);
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+    if (border) {
+      ctx.strokeStyle = border;
+      ctx.lineWidth = 1.8;
+      ctx.stroke();
+    }
+  }
+
+  function drawRoundedRectPath(ctx, x, y, w, h, radius) {
+    const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function drawFittedText(
+    ctx,
+    {
+      text,
+      x,
+      y,
+      maxWidth,
+      maxSize = 40,
+      minSize = 14,
+      weight = 700,
+      color = "#ffffff",
+      align = "center",
+      family = "SUIT, sans-serif",
+    }
+  ) {
+    const value = String(text || "").trim();
+    if (!value) {
+      return minSize;
+    }
+
+    let fontSize = maxSize;
+    while (fontSize > minSize) {
+      ctx.font = `${weight} ${fontSize}px ${family}`;
+      if (ctx.measureText(value).width <= maxWidth) {
+        break;
+      }
+      fontSize -= 1;
+    }
+
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${fontSize}px ${family}`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(value, x, y, maxWidth);
+    return fontSize;
+  }
+
+  function drawStatLine(ctx, x, y, text, color) {
+    ctx.fillStyle = color;
+    ctx.font = "700 28px SUIT, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(text, x, y);
+  }
+
+  function formatPosterDateTime(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) {
+      return "일시 미정";
+    }
+    return date.toLocaleString("ko-KR", {
+      month: "long",
+      day: "numeric",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   function downloadAutoBackupJson() {
