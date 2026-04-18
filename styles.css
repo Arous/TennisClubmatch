@@ -1457,6 +1457,97 @@ body {
   margin-top: 2px;
 }
 
+.app-dialog {
+  z-index: 92;
+  background:
+    radial-gradient(circle at 20% 16%, rgba(84, 190, 149, 0.26), transparent 45%),
+    radial-gradient(circle at 82% 88%, rgba(25, 128, 95, 0.2), transparent 42%),
+    rgba(10, 18, 15, 0.56);
+  backdrop-filter: blur(4px);
+}
+
+.app-dialog-card {
+  width: min(460px, 94vw);
+  border-radius: 20px;
+  border: 1px solid #cfe0d7;
+  box-shadow: 0 24px 52px rgba(9, 20, 16, 0.42);
+  overflow: hidden;
+}
+
+.app-dialog-head {
+  padding: 13px 14px;
+  background: linear-gradient(155deg, #f6fbf8, #eef6f1);
+}
+
+.app-dialog-headline {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.app-dialog-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #2cb783, #1e8e66);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.app-dialog[data-tone="danger"] .app-dialog-badge {
+  background: linear-gradient(145deg, #e35b71, #c83b55);
+}
+
+.app-dialog-head .icon-btn {
+  background: #ffffff;
+  border-color: #cfdbd4;
+}
+
+.app-dialog-head .icon-btn:hover {
+  border-color: #adbeb4;
+  box-shadow: 0 5px 14px rgba(20, 44, 34, 0.14);
+}
+
+.app-dialog-body {
+  gap: 14px;
+  padding: 16px;
+}
+
+.app-dialog-message {
+  margin: 0;
+  color: #35483f;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.app-dialog-input-wrap {
+  margin: 0;
+}
+
+.app-dialog-input-wrap span {
+  color: #416154;
+  font-weight: 700;
+}
+
+.app-dialog-input-wrap input {
+  border-color: #c7d9cf;
+  background: #fcfffd;
+}
+
+.app-dialog-actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.app-dialog-actions .btn {
+  min-width: 96px;
+}
+
 .right-actions {
   display: flex;
   gap: 8px;

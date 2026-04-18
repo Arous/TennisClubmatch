@@ -10,7 +10,10 @@
     interval: 30,
   };
   const SYNC_TABLE = "shared_match_states";
-  const DEFAULT_SYNC_ROOM_ID = "friendly-match-room";
+  const DEFAULT_SYNC_MATCH_ID = "friendly-match-room";
+  const DEFAULT_SUPABASE_URL = "https://isfkbxyjagwmfcdpemqb.supabase.co";
+  const DEFAULT_SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZmtieHlqYWd3bWZjZHBlbXFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY0NTY4MDAsImV4cCI6MjA5MjAzMjgwMH0.6DmacuS3uD59s7L_VAwwNBlP4Vi6GhPsPkOhdKv48M8";
 
   const MATCH_TYPE = {
     male: { code: "male", label: "남복" },
@@ -32,7 +35,7 @@
     saveStatus: document.getElementById("saveStatus"),
     supabaseUrlInput: document.getElementById("supabaseUrlInput"),
     supabaseAnonKeyInput: document.getElementById("supabaseAnonKeyInput"),
-    syncRoomInput: document.getElementById("syncRoomInput"),
+    syncMatchIdInput: document.getElementById("syncMatchIdInput"),
     syncWritePasswordInput: document.getElementById("syncWritePasswordInput"),
     connectSyncBtn: document.getElementById("connectSyncBtn"),
     disconnectSyncBtn: document.getElementById("disconnectSyncBtn"),
@@ -75,6 +78,16 @@
     matchMemoInput: document.getElementById("matchMemoInput"),
     matchForm: document.getElementById("matchForm"),
     deleteMatchBtn: document.getElementById("deleteMatchBtn"),
+
+    appDialog: document.getElementById("appDialog"),
+    appDialogTitle: document.getElementById("appDialogTitle"),
+    appDialogMessage: document.getElementById("appDialogMessage"),
+    appDialogInputWrap: document.getElementById("appDialogInputWrap"),
+    appDialogInputLabel: document.getElementById("appDialogInputLabel"),
+    appDialogInput: document.getElementById("appDialogInput"),
+    appDialogCloseBtn: document.getElementById("appDialogCloseBtn"),
+    appDialogCancelBtn: document.getElementById("appDialogCancelBtn"),
+    appDialogConfirmBtn: document.getElementById("appDialogConfirmBtn"),
   };
 
   let state = normalizeState(loadState());
@@ -96,6 +109,8 @@
   let syncPushQueued = false;
   let syncPullInProgress = false;
   let syncConnected = false;
+  let dialogQueue = [];
+  let activeDialogJob = null;
 
   init();
 
@@ -125,13 +140,13 @@
       saveState(false);
     });
 
-    el.saveNowBtn.addEventListener("click", () => {
+    el.saveNowBtn.addEventListener("click", async () => {
       const latestWritePassword = String(el.syncWritePasswordInput?.value || "").trim();
       if (latestWritePassword !== syncConfig.writePassword) {
         saveSyncConfig({ ...syncConfig, writePassword: latestWritePassword });
       }
 
-      const allowCloudSync = requestCloudSaveApproval();
+      const allowCloudSync = await requestCloudSaveApproval();
       saveState(true, {
         forceSync: allowCloudSync,
         skipSync: syncConnected && !allowCloudSync,
@@ -151,8 +166,12 @@
       el.disconnectSyncBtn.addEventListener("click", disconnectSupabaseSync);
     }
 
-    el.resetBtn.addEventListener("click", () => {
-      const ok = window.confirm("모든 데이터를 초기화할까요? 기존 기록은 삭제됩니다.");
+    el.resetBtn.addEventListener("click", async () => {
+      const ok = await appConfirm("모든 데이터를 초기화할까요? 기존 기록은 삭제됩니다.", {
+        title: "초기화 확인",
+        confirmText: "초기화",
+        confirmTone: "danger",
+      });
       if (!ok) {
         return;
       }
@@ -178,7 +197,7 @@
 
     el.applyTimeConfigBtn.addEventListener("click", applyTimeConfigFromInputs);
 
-    el.clubsContainer.addEventListener("submit", (event) => {
+    el.clubsContainer.addEventListener("submit", async (event) => {
       const form = event.target;
       if (!form.classList.contains("player-form")) {
         return;
@@ -194,13 +213,13 @@
       const gender = String(form.elements.namedItem("gender").value || "");
 
       if (!rawNames || (gender !== "M" && gender !== "F")) {
-        window.alert("이름과 성별은 필수입니다.");
+        await appAlert("이름과 성별은 필수입니다.", { title: "입력 확인" });
         return;
       }
 
       const names = parseBulkPlayerNames(rawNames);
       if (names.length === 0) {
-        window.alert("선수 이름을 입력해 주세요. 쉼표로 여러 명 입력할 수 있습니다.");
+        await appAlert("선수 이름을 입력해 주세요. 쉼표로 여러 명 입력할 수 있습니다.", { title: "입력 확인" });
         return;
       }
 
@@ -292,7 +311,7 @@
       commitPlayerNameEdit(input, { saveIfBlank: false });
     });
 
-    el.clubsContainer.addEventListener("click", (event) => {
+    el.clubsContainer.addEventListener("click", async (event) => {
       const nameDisplay = event.target.closest(".player-name-display");
       if (nameDisplay) {
         const clubIndex = Number(nameDisplay.dataset.clubIndex);
@@ -360,7 +379,11 @@
           message += `\n해당 선수는 ${connectedMatches}개 경기 슬롯에 배정되어 있어, 삭제 시 슬롯에서 자동 제거됩니다.`;
         }
 
-        const ok = window.confirm(message);
+        const ok = await appConfirm(message, {
+          title: "선수 삭제 확인",
+          confirmText: "삭제",
+          confirmTone: "danger",
+        });
         if (!ok) {
           return;
         }
@@ -371,11 +394,11 @@
       }
     });
 
-    el.scheduleTable.addEventListener("click", (event) => {
+    el.scheduleTable.addEventListener("click", async (event) => {
       const removeCourtBtn = event.target.closest(".court-remove-btn");
       if (removeCourtBtn) {
         const courtId = removeCourtBtn.dataset.courtId;
-        removeCourt(courtId);
+        await removeCourt(courtId);
         return;
       }
 
@@ -403,9 +426,9 @@
     el.scheduleTable.addEventListener("dragend", handleScheduleDragEnd);
 
     el.matchForm.addEventListener("click", handleModalPickerClick);
-    el.matchForm.addEventListener("submit", (event) => {
+    el.matchForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      saveMatchFromModal();
+      await saveMatchFromModal();
     });
 
     el.scoreAInput.addEventListener("input", updateMatchTypeBadgeFromModal);
@@ -430,12 +453,16 @@
       renderStats();
     });
 
-    el.deleteMatchBtn.addEventListener("click", () => {
+    el.deleteMatchBtn.addEventListener("click", async () => {
       if (!activeSlotKey || !state.matches[activeSlotKey]) {
         closeMatchModal();
         return;
       }
-      const ok = window.confirm("이 슬롯의 경기를 삭제할까요?");
+      const ok = await appConfirm("이 슬롯의 경기를 삭제할까요?", {
+        title: "경기 삭제 확인",
+        confirmText: "삭제",
+        confirmTone: "danger",
+      });
       if (!ok) {
         return;
       }
@@ -457,10 +484,20 @@
     });
 
     document.addEventListener("keydown", (event) => {
+      if (el.appDialog && !el.appDialog.classList.contains("hidden")) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          resolveActiveDialog({ confirmed: false, dismissed: true, value: null });
+        }
+        return;
+      }
+
       if (event.key === "Escape" && !el.matchModal.classList.contains("hidden")) {
         closeMatchModal();
       }
     });
+
+    bindDialogEvents();
 
     window.addEventListener("resize", syncNowLine);
     el.tableWrap.addEventListener("scroll", syncNowLine);
@@ -486,23 +523,241 @@
     renderSaveStatus();
   }
 
+  function bindDialogEvents() {
+    if (
+      !el.appDialog ||
+      !el.appDialogCloseBtn ||
+      !el.appDialogCancelBtn ||
+      !el.appDialogConfirmBtn ||
+      !el.appDialogInput
+    ) {
+      return;
+    }
+    if (el.appDialog.dataset.bound === "true") {
+      return;
+    }
+
+    el.appDialogCloseBtn.addEventListener("click", () => {
+      resolveActiveDialog({ confirmed: false, dismissed: true, value: null });
+    });
+    el.appDialogCancelBtn.addEventListener("click", () => {
+      resolveActiveDialog({ confirmed: false, dismissed: false, value: null });
+    });
+    el.appDialogConfirmBtn.addEventListener("click", confirmActiveDialog);
+    el.appDialog.addEventListener("click", (event) => {
+      if (event.target === el.appDialog) {
+        resolveActiveDialog({ confirmed: false, dismissed: true, value: null });
+      }
+    });
+    el.appDialogInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        confirmActiveDialog();
+      }
+    });
+
+    el.appDialog.dataset.bound = "true";
+  }
+
+  function hasDialogUi() {
+    return !!(
+      el.appDialog &&
+      el.appDialogTitle &&
+      el.appDialogMessage &&
+      el.appDialogInputWrap &&
+      el.appDialogInputLabel &&
+      el.appDialogInput &&
+      el.appDialogCloseBtn &&
+      el.appDialogCancelBtn &&
+      el.appDialogConfirmBtn
+    );
+  }
+
+  function confirmActiveDialog() {
+    if (!activeDialogJob) {
+      return;
+    }
+
+    const mode = activeDialogJob.config.mode;
+    const value = mode === "prompt" ? String(el.appDialogInput?.value || "") : null;
+    resolveActiveDialog({ confirmed: true, dismissed: false, value });
+  }
+
+  function resolveActiveDialog(result) {
+    if (!activeDialogJob) {
+      return;
+    }
+
+    const resolver = activeDialogJob.resolve;
+    activeDialogJob = null;
+
+    if (el.appDialog) {
+      el.appDialog.classList.add("hidden");
+      el.appDialog.setAttribute("aria-hidden", "true");
+    }
+
+    resolver(result);
+    openNextDialog();
+  }
+
+  function openNextDialog() {
+    if (activeDialogJob || dialogQueue.length === 0) {
+      return;
+    }
+
+    activeDialogJob = dialogQueue.shift();
+    const config = activeDialogJob.config;
+    if (!hasDialogUi()) {
+      if (config.mode === "alert") {
+        window.alert(config.message);
+        resolveActiveDialog({ confirmed: true, dismissed: false, value: null });
+        return;
+      }
+      if (config.mode === "prompt") {
+        const value = window.prompt(config.message, config.defaultValue || "");
+        resolveActiveDialog({ confirmed: value !== null, dismissed: false, value });
+        return;
+      }
+      const ok = window.confirm(config.message);
+      resolveActiveDialog({ confirmed: ok, dismissed: false, value: null });
+      return;
+    }
+
+    el.appDialogTitle.textContent = config.title;
+    el.appDialogMessage.textContent = config.message;
+    el.appDialogCancelBtn.textContent = config.cancelText;
+    el.appDialogConfirmBtn.textContent = config.confirmText;
+
+    if (config.confirmTone === "danger") {
+      el.appDialogConfirmBtn.classList.add("btn-danger");
+      el.appDialogConfirmBtn.classList.remove("btn-primary");
+      el.appDialog.dataset.tone = "danger";
+    } else {
+      el.appDialogConfirmBtn.classList.add("btn-primary");
+      el.appDialogConfirmBtn.classList.remove("btn-danger");
+      el.appDialog.dataset.tone = "primary";
+    }
+
+    if (config.mode === "alert") {
+      el.appDialogCancelBtn.classList.add("hidden");
+      el.appDialogCloseBtn.classList.add("hidden");
+    } else {
+      el.appDialogCancelBtn.classList.remove("hidden");
+      el.appDialogCloseBtn.classList.remove("hidden");
+    }
+
+    if (config.mode === "prompt") {
+      el.appDialogInputWrap.classList.remove("hidden");
+      el.appDialogInputLabel.textContent = config.inputLabel;
+      el.appDialogInput.type = config.inputType;
+      el.appDialogInput.placeholder = config.placeholder || "";
+      el.appDialogInput.value = config.defaultValue || "";
+    } else {
+      el.appDialogInputWrap.classList.add("hidden");
+      el.appDialogInput.value = "";
+    }
+
+    el.appDialog.classList.remove("hidden");
+    el.appDialog.setAttribute("aria-hidden", "false");
+
+    if (config.mode === "prompt") {
+      window.setTimeout(() => {
+        el.appDialogInput.focus();
+        el.appDialogInput.select();
+      }, 0);
+      return;
+    }
+
+    window.setTimeout(() => {
+      el.appDialogConfirmBtn.focus();
+    }, 0);
+  }
+
+  function openDialog(config) {
+    return new Promise((resolve) => {
+      dialogQueue.push({ config, resolve });
+      openNextDialog();
+    });
+  }
+
+  async function appAlert(message, options = {}) {
+    const title = String(options.title || "알림");
+    const confirmText = String(options.confirmText || "확인");
+    await openDialog({
+      mode: "alert",
+      title,
+      message: String(message || ""),
+      confirmText,
+      cancelText: "",
+      confirmTone: options.confirmTone === "danger" ? "danger" : "primary",
+      inputLabel: "",
+      inputType: "text",
+      placeholder: "",
+      defaultValue: "",
+    });
+  }
+
+  async function appConfirm(message, options = {}) {
+    const title = String(options.title || "확인");
+    const confirmText = String(options.confirmText || "확인");
+    const cancelText = String(options.cancelText || "취소");
+    const result = await openDialog({
+      mode: "confirm",
+      title,
+      message: String(message || ""),
+      confirmText,
+      cancelText,
+      confirmTone: options.confirmTone === "danger" ? "danger" : "primary",
+      inputLabel: "",
+      inputType: "text",
+      placeholder: "",
+      defaultValue: "",
+    });
+    return !!result.confirmed;
+  }
+
+  async function appPrompt(message, options = {}) {
+    const title = String(options.title || "입력");
+    const confirmText = String(options.confirmText || "확인");
+    const cancelText = String(options.cancelText || "취소");
+    const result = await openDialog({
+      mode: "prompt",
+      title,
+      message: String(message || ""),
+      confirmText,
+      cancelText,
+      confirmTone: options.confirmTone === "danger" ? "danger" : "primary",
+      inputLabel: String(options.inputLabel || "입력"),
+      inputType: String(options.inputType || "text"),
+      placeholder: String(options.placeholder || ""),
+      defaultValue: String(options.defaultValue || ""),
+    });
+
+    if (!result.confirmed) {
+      return null;
+    }
+    return String(result.value || "");
+  }
+
   function normalizeSyncConfig(input) {
     const source = isObject(input) ? input : {};
+    const url = String(source.url || "").trim();
+    const anonKey = String(source.anonKey || "").trim();
     return {
-      url: String(source.url || "").trim(),
-      anonKey: String(source.anonKey || "").trim(),
-      roomId: sanitizeRoomId(source.roomId),
+      url: url || DEFAULT_SUPABASE_URL,
+      anonKey: anonKey || DEFAULT_SUPABASE_ANON_KEY,
+      matchId: sanitizeMatchId(source.matchId || source.roomId),
       writePassword: String(source.writePassword || "").trim(),
       autoConnect: source.autoConnect !== false,
     };
   }
 
-  function sanitizeRoomId(value) {
+  function sanitizeMatchId(value) {
     const roomRaw = String(value || "")
       .trim()
       .replace(/\s+/g, "-")
       .replace(/[^a-zA-Z0-9._-]/g, "");
-    return roomRaw || DEFAULT_SYNC_ROOM_ID;
+    return roomRaw || DEFAULT_SYNC_MATCH_ID;
   }
 
   function loadSyncConfig() {
@@ -523,13 +778,13 @@
   }
 
   function renderSyncConfigInputs() {
-    if (!el.supabaseUrlInput || !el.supabaseAnonKeyInput || !el.syncRoomInput || !el.syncWritePasswordInput) {
+    if (!el.supabaseUrlInput || !el.supabaseAnonKeyInput || !el.syncMatchIdInput || !el.syncWritePasswordInput) {
       return;
     }
 
     el.supabaseUrlInput.value = syncConfig.url;
     el.supabaseAnonKeyInput.value = syncConfig.anonKey;
-    el.syncRoomInput.value = syncConfig.roomId;
+    el.syncMatchIdInput.value = syncConfig.matchId;
     el.syncWritePasswordInput.value = syncConfig.writePassword;
   }
 
@@ -537,29 +792,36 @@
     return normalizeSyncConfig({
       url: String(el.supabaseUrlInput?.value || ""),
       anonKey: String(el.supabaseAnonKeyInput?.value || ""),
-      roomId: String(el.syncRoomInput?.value || ""),
+      matchId: String(el.syncMatchIdInput?.value || ""),
       writePassword: String(el.syncWritePasswordInput?.value || ""),
       autoConnect: true,
     });
   }
 
   function hasSyncCredentials(config) {
-    return !!(config.url && config.anonKey && config.roomId);
+    return !!(config.url && config.anonKey && config.matchId);
   }
 
   function isSyncWriteProtected() {
     return !!syncConfig.writePassword;
   }
 
-  function requestCloudSaveApproval() {
+  async function requestCloudSaveApproval() {
     if (!syncConnected || !syncClient) {
       return false;
     }
     if (!isSyncWriteProtected()) {
-      return true;
+      renderSyncStatus("저장 비밀번호가 비어 있어 로컬 저장만 적용됩니다.");
+      return false;
     }
 
-    const entered = window.prompt("클라우드 저장 비밀번호를 입력하세요.");
+    const entered = await appPrompt("클라우드 저장 비밀번호를 입력하세요.", {
+      title: "비밀번호 확인",
+      inputLabel: "저장 비밀번호",
+      inputType: "password",
+      confirmText: "확인",
+      cancelText: "취소",
+    });
     if (entered === null) {
       renderSyncStatus("비밀번호 입력이 취소되어 로컬 저장만 적용됩니다.");
       return false;
@@ -586,7 +848,13 @@
       return;
     }
 
-    el.connectSyncBtn.disabled = !!connecting || syncConnected;
+    if (connecting) {
+      el.connectSyncBtn.textContent = "연결 중...";
+    } else {
+      el.connectSyncBtn.textContent = syncConnected ? "재동기화" : "동기화 연결";
+    }
+
+    el.connectSyncBtn.disabled = !!connecting;
     el.disconnectSyncBtn.disabled = !!connecting || !syncConnected;
   }
 
@@ -603,7 +871,7 @@
     renderSyncConfigInputs();
 
     if (!hasSyncCredentials(syncConfig)) {
-      renderSyncStatus("Project URL, Anon Key, Room ID를 모두 입력해 주세요.", { error: true });
+      renderSyncStatus("Project URL, Anon Key, Match ID를 모두 입력해 주세요.", { error: true });
       return;
     }
 
@@ -633,11 +901,14 @@
         // 연결 즉시 원격 데이터를 우선 반영해 새로고침 없이 같은 화면을 보게 합니다.
         applyRemoteState(remoteRow.payload, { source: "초기 동기화" });
       } else {
-        if (!isSyncWriteProtected()) {
-          await pushStateToCloud({ immediate: true });
+        if (isSyncWriteProtected()) {
+          renderSyncStatus(
+            `클라우드 동기화 연결됨 (Match ID: ${syncConfig.matchId}) · 원격 데이터 없음, 저장 버튼 비밀번호 인증 후 업로드`,
+            { error: false }
+          );
         } else {
           renderSyncStatus(
-            `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId}) · 원격 데이터 없음, 저장 버튼 비밀번호 인증 후 업로드`,
+            `클라우드 동기화 연결됨 (Match ID: ${syncConfig.matchId}) · 비밀번호 미설정(읽기 전용, 로컬 저장만)`,
             { error: false }
           );
         }
@@ -646,8 +917,8 @@
       subscribeSyncChannel();
       renderSyncStatus(
         isSyncWriteProtected()
-          ? `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId}) · 저장 시 비밀번호 필요`
-          : `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`
+          ? `클라우드 동기화 연결됨 (Match ID: ${syncConfig.matchId}) · 저장 시 비밀번호 필요`
+          : `클라우드 동기화 연결됨 (Match ID: ${syncConfig.matchId}) · 비밀번호 미설정(읽기 전용, 로컬 저장만)`
       );
     } catch (error) {
       syncConnected = false;
@@ -706,7 +977,7 @@
     const { data, error } = await syncClient
       .from(SYNC_TABLE)
       .select("room_id,payload,updated_at,updated_by")
-      .eq("room_id", syncConfig.roomId)
+      .eq("room_id", syncConfig.matchId)
       .maybeSingle();
 
     if (error) {
@@ -769,14 +1040,14 @@
     }
 
     syncChannel = syncClient
-      .channel(`sync-room-${syncConfig.roomId}`)
+      .channel(`sync-match-${syncConfig.matchId}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: SYNC_TABLE,
-          filter: `room_id=eq.${syncConfig.roomId}`,
+          filter: `room_id=eq.${syncConfig.matchId}`,
         },
         (payload) => {
           const nextRow = payload.new;
@@ -794,7 +1065,7 @@
       )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") {
-          renderSyncStatus(`클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`);
+          renderSyncStatus(`클라우드 동기화 연결됨 (Match ID: ${syncConfig.matchId})`);
           return;
         }
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
@@ -835,7 +1106,7 @@
 
     try {
       const row = {
-        room_id: syncConfig.roomId,
+        room_id: syncConfig.matchId,
         payload: state,
         updated_by: syncClientId,
         updated_at: new Date().toISOString(),
@@ -1830,7 +2101,7 @@
     `;
   }
 
-  function saveMatchFromModal() {
+  async function saveMatchFromModal() {
     if (!activeSlotKey || !modalDraft) {
       return;
     }
@@ -1839,17 +2110,17 @@
     const clubBSelected = compactPlayerIds(modalDraft.clubBSelected);
 
     if (clubASelected.length < 2 || clubBSelected.length < 2) {
-      window.alert("각 클럽 선수 2명씩 선택해야 합니다.");
+      await appAlert("각 클럽 선수 2명씩 선택해야 합니다.", { title: "입력 확인" });
       return;
     }
 
     if (clubASelected[0] === clubASelected[1]) {
-      window.alert("클럽 1 선수는 서로 달라야 합니다.");
+      await appAlert("클럽 1 선수는 서로 달라야 합니다.", { title: "입력 확인" });
       return;
     }
 
     if (clubBSelected[0] === clubBSelected[1]) {
-      window.alert("클럽 2 선수는 서로 달라야 합니다.");
+      await appAlert("클럽 2 선수는 서로 달라야 합니다.", { title: "입력 확인" });
       return;
     }
 
@@ -1897,13 +2168,13 @@
     updateMatchTypeBadgeFromModal();
   }
 
-  function removeCourt(courtId) {
+  async function removeCourt(courtId) {
     if (!courtId) {
       return;
     }
 
     if (state.courts.length <= 1) {
-      window.alert("코트는 최소 1개 이상 필요합니다.");
+      await appAlert("코트는 최소 1개 이상 필요합니다.", { title: "삭제 불가" });
       return;
     }
 
@@ -1912,7 +2183,11 @@
       return;
     }
 
-    const ok = window.confirm(`\"${target.name || "코트"}\"를 삭제할까요? 해당 코트 경기 기록도 함께 삭제됩니다.`);
+    const ok = await appConfirm(`\"${target.name || "코트"}\"를 삭제할까요? 해당 코트 경기 기록도 함께 삭제됩니다.`, {
+      title: "코트 삭제 확인",
+      confirmText: "삭제",
+      confirmTone: "danger",
+    });
     if (!ok) {
       return;
     }
@@ -1934,19 +2209,21 @@
     saveState(true);
   }
 
-  function applyTimeConfigFromInputs() {
+  async function applyTimeConfigFromInputs() {
     const start = String(el.timeStartInput.value || "").trim();
     const end = String(el.timeEndInput.value || "").trim();
     const interval = Math.floor(Number(el.slotMinutesInput.value));
 
     const nextSlots = generateTimeSlots(start, end, interval);
     if (!nextSlots) {
-      window.alert("시간 설정이 올바르지 않습니다. 시작/종료 시간과 간격(분)을 확인해 주세요.");
+      await appAlert("시간 설정이 올바르지 않습니다. 시작/종료 시간과 간격(분)을 확인해 주세요.", {
+        title: "시간 설정 오류",
+      });
       return;
     }
 
     if (nextSlots.length === 0) {
-      window.alert("생성 가능한 경기 시간이 없습니다.");
+      await appAlert("생성 가능한 경기 시간이 없습니다.", { title: "시간 설정 오류" });
       return;
     }
 
@@ -2467,8 +2744,7 @@
     const { forceSync = false, skipSync = false, saveMessage = "저장 완료" } = options;
     state.updatedAt = new Date().toISOString();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    const shouldSync =
-      syncConnected && !syncPullInProgress && !skipSync && (forceSync || !isSyncWriteProtected());
+    const shouldSync = syncConnected && !syncPullInProgress && !skipSync && forceSync;
     if (shouldSync) {
       queueSyncPush({ immediate: !!showMessage || forceSync });
     }
@@ -2557,7 +2833,7 @@
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const parsed = JSON.parse(String(reader.result));
         state = normalizeState(parsed);
@@ -2566,7 +2842,7 @@
         renderAll();
         saveState(true);
       } catch (error) {
-        window.alert("JSON 파일 형식이 올바르지 않습니다.");
+        await appAlert("JSON 파일 형식이 올바르지 않습니다.", { title: "불러오기 오류" });
       }
     };
 
