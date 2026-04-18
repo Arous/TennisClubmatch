@@ -663,6 +663,9 @@
 
   function shouldApplyRemoteState(remotePayload, remoteUpdatedAt) {
     const remoteState = normalizeState(remotePayload);
+    if (hasMeaningfulState(remoteState) && !hasMeaningfulState(state)) {
+      return true;
+    }
     const remoteMs = toTimestampMs(remoteUpdatedAt || remoteState.updatedAt);
     const localMs = toTimestampMs(state.updatedAt);
 
@@ -673,6 +676,25 @@
       return true;
     }
     return remoteMs >= localMs;
+  }
+
+  function hasMeaningfulState(targetState) {
+    const nextState = normalizeState(targetState);
+
+    if (String(nextState.matchName || "").trim()) {
+      return true;
+    }
+    if (String(nextState.matchDate || "").trim()) {
+      return true;
+    }
+    if (String(nextState.matchLocation || "").trim()) {
+      return true;
+    }
+    if (Object.keys(nextState.matches || {}).length > 0) {
+      return true;
+    }
+
+    return nextState.clubs.some((club) => Array.isArray(club.players) && club.players.length > 0);
   }
 
   function applyRemoteState(remotePayload, { source = "원격 변경" } = {}) {
