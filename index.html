@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>테니스 클럽 교류전 매치 기록</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=SUIT:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-ornament bg-ornament-a" aria-hidden="true"></div>
+    <div class="bg-ornament bg-ornament-b" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <header class="hero card reveal">
+        <div class="hero-head">
+          <h1>테니스 클럽 친선 교류전 매치 기록</h1>
+          <p>클럽 등록, 코트 편성, 결과 입력, 자동 통계를 한 화면에서 관리</p>
+        </div>
+
+        <div class="meta-grid">
+          <label class="field">
+            <span>대회명</span>
+            <input id="matchNameInput" type="text" placeholder="예: 그린 vs 행빡 스프링 교류전" />
+          </label>
+          <label class="field">
+            <span>경기 일시</span>
+            <input id="matchDateInput" type="datetime-local" />
+          </label>
+          <label class="field">
+            <span>장소</span>
+            <input id="matchLocationInput" type="text" placeholder="예: 파미르 테니스장" />
+          </label>
+        </div>
+
+        <div class="toolbar">
+          <button id="saveNowBtn" class="btn btn-primary" type="button">저장</button>
+          <button id="exportBtn" class="btn" type="button">자동 백업 다운로드</button>
+          <button id="importBtn" class="btn" type="button">JSON 불러오기</button>
+          <input id="importFileInput" type="file" accept="application/json" hidden />
+          <button id="resetBtn" class="btn btn-danger" type="button">초기화</button>
+          <span id="saveStatus" class="save-status">자동 저장 준비됨</span>
+        </div>
+      </header>
+
+      <main class="layout-grid">
+        <section class="card reveal">
+          <div class="section-title-wrap">
+            <h2>클럽 정보 / 선수 등록</h2>
+            <p>필수: 이름, 성별</p>
+          </div>
+          <div id="clubsContainer" class="clubs-grid"></div>
+        </section>
+
+        <section class="card reveal">
+          <div class="section-title-wrap schedule-head">
+            <div>
+              <h2>코트 타임테이블</h2>
+              <p>시간 × 코트 슬롯 클릭으로 선수 배정/결과 입력</p>
+            </div>
+            <div class="schedule-tools">
+              <div class="time-config">
+                <label class="field compact time-field">
+                  <span>시작</span>
+                  <input id="timeStartInput" type="time" />
+                </label>
+                <label class="field compact time-field">
+                  <span>종료</span>
+                  <input id="timeEndInput" type="time" />
+                </label>
+                <label class="field compact time-field time-field-small">
+                  <span>간격(분)</span>
+                  <input id="slotMinutesInput" type="number" min="5" max="180" step="5" />
+                </label>
+                <button id="applyTimeConfigBtn" class="btn" type="button">시간 적용</button>
+              </div>
+              <button id="addCourtBtn" class="btn btn-primary" type="button">+ 코트 추가</button>
+            </div>
+          </div>
+
+          <div class="legend">
+            <span class="legend-item type-male">남복</span>
+            <span class="legend-item type-female">여복</span>
+            <span class="legend-item type-mixed">혼복</span>
+            <span class="legend-item type-open">잡복</span>
+          </div>
+
+          <div id="tableWrap" class="table-wrap">
+            <table id="scheduleTable" class="schedule-table"></table>
+            <div id="nowLine" class="now-line hidden" aria-hidden="true">
+              <span id="nowLineLabel" class="now-line-label"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card reveal">
+          <div class="section-title-wrap">
+            <h2>통계</h2>
+            <p>매치 결과 입력 시 자동 반영</p>
+          </div>
+
+          <div class="trend-card">
+            <div class="trend-card-head">
+              <h3>시간 흐름 그래프</h3>
+              <p>0 기준: 위는 좌측 클럽 우세, 아래는 우측 클럽 우세</p>
+            </div>
+            <div id="trendGraphWrap" class="trend-graph-wrap"></div>
+            <div id="trendGraphHint" class="trend-graph-hint"></div>
+          </div>
+
+          <div id="clubStats" class="club-stats-grid"></div>
+          <div id="topWinnerBox" class="top-winner"></div>
+          <div id="playerStats" class="player-stats-grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="matchModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal-head">
+          <h3 id="modalTitle">슬롯 편집</h3>
+          <button id="closeModalBtn" class="icon-btn" type="button" aria-label="닫기">✕</button>
+        </div>
+
+        <form id="matchForm" class="modal-body">
+          <div class="modal-grid">
+            <div class="group-block" data-club-index="0">
+              <div class="group-title-row">
+                <h4 id="clubAName">클럽 A</h4>
+                <small>2명 선택</small>
+              </div>
+              <div id="clubASelected" class="selected-player-row"></div>
+              <p class="pool-guide">하단 선수 이름을 누르면 위에 추가됩니다.</p>
+              <div id="clubAPlayerPool" class="player-pool"></div>
+            </div>
+
+            <div class="group-block" data-club-index="1">
+              <div class="group-title-row">
+                <h4 id="clubBName">클럽 B</h4>
+                <small>2명 선택</small>
+              </div>
+              <div id="clubBSelected" class="selected-player-row"></div>
+              <p class="pool-guide">하단 선수 이름을 누르면 위에 추가됩니다.</p>
+              <div id="clubBPlayerPool" class="player-pool"></div>
+            </div>
+          </div>
+
+          <div class="result-row">
+            <label class="field compact">
+              <span id="scoreLabelA">클럽 A 점수</span>
+              <input id="scoreAInput" type="number" min="0" inputmode="numeric" placeholder="예: 6" />
+            </label>
+            <label class="field compact">
+              <span id="scoreLabelB">클럽 B 점수</span>
+              <input id="scoreBInput" type="number" min="0" inputmode="numeric" placeholder="예: 4" />
+            </label>
+            <div class="match-type-box">
+              <span>자동 판별</span>
+              <strong id="matchTypeBadge" class="type-badge">미정</strong>
+            </div>
+          </div>
+
+          <label class="field compact">
+            <span>메모</span>
+            <textarea id="matchMemoInput" rows="2" placeholder="메모가 필요하면 입력하세요"></textarea>
+          </label>
+
+          <div class="modal-actions">
+            <button id="deleteMatchBtn" class="btn btn-danger" type="button">경기 삭제</button>
+            <div class="right-actions">
+              <button id="cancelModalBtn" class="btn" type="button">취소</button>
+              <button class="btn btn-primary" type="submit">저장</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

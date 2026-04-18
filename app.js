@@ -1,0 +1,2193 @@
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "tennis-club-match-state-v2";
+  const LEGACY_STORAGE_KEYS = ["tennis-club-match-state-v1"];
+  const DEFAULT_TIME_CONFIG = {
+    start: "14:00",
+    end: "17:00",
+    interval: 30,
+  };
+
+  const MATCH_TYPE = {
+    male: { code: "male", label: "남복" },
+    female: { code: "female", label: "여복" },
+    mixed: { code: "mixed", label: "혼복" },
+    open: { code: "open", label: "잡복" },
+    pending: { code: "pending", label: "미정" },
+  };
+
+  const el = {
+    matchNameInput: document.getElementById("matchNameInput"),
+    matchDateInput: document.getElementById("matchDateInput"),
+    matchLocationInput: document.getElementById("matchLocationInput"),
+    saveNowBtn: document.getElementById("saveNowBtn"),
+    exportBtn: document.getElementById("exportBtn"),
+    importBtn: document.getElementById("importBtn"),
+    importFileInput: document.getElementById("importFileInput"),
+    resetBtn: document.getElementById("resetBtn"),
+    saveStatus: document.getElementById("saveStatus"),
+
+    addCourtBtn: document.getElementById("addCourtBtn"),
+    applyTimeConfigBtn: document.getElementById("applyTimeConfigBtn"),
+    timeStartInput: document.getElementById("timeStartInput"),
+    timeEndInput: document.getElementById("timeEndInput"),
+    slotMinutesInput: document.getElementById("slotMinutesInput"),
+
+    clubsContainer: document.getElementById("clubsContainer"),
+    scheduleTable: document.getElementById("scheduleTable"),
+    tableWrap: document.getElementById("tableWrap"),
+    nowLine: document.getElementById("nowLine"),
+    nowLineLabel: document.getElementById("nowLineLabel"),
+
+    clubStats: document.getElementById("clubStats"),
+    playerStats: document.getElementById("playerStats"),
+    topWinnerBox: document.getElementById("topWinnerBox"),
+    trendGraphWrap: document.getElementById("trendGraphWrap"),
+    trendGraphHint: document.getElementById("trendGraphHint"),
+
+    matchModal: document.getElementById("matchModal"),
+    closeModalBtn: document.getElementById("closeModalBtn"),
+    cancelModalBtn: document.getElementById("cancelModalBtn"),
+    modalTitle: document.getElementById("modalTitle"),
+    clubAName: document.getElementById("clubAName"),
+    clubBName: document.getElementById("clubBName"),
+    clubASelected: document.getElementById("clubASelected"),
+    clubBSelected: document.getElementById("clubBSelected"),
+    clubAPlayerPool: document.getElementById("clubAPlayerPool"),
+    clubBPlayerPool: document.getElementById("clubBPlayerPool"),
+
+    scoreAInput: document.getElementById("scoreAInput"),
+    scoreBInput: document.getElementById("scoreBInput"),
+    scoreLabelA: document.getElementById("scoreLabelA"),
+    scoreLabelB: document.getElementById("scoreLabelB"),
+    matchTypeBadge: document.getElementById("matchTypeBadge"),
+    matchMemoInput: document.getElementById("matchMemoInput"),
+    matchForm: document.getElementById("matchForm"),
+    deleteMatchBtn: document.getElementById("deleteMatchBtn"),
+  };
+
+  let state = normalizeState(loadState());
+  let activeSlotKey = null;
+  let modalDraft = null;
+  let editingPlayer = null;
+  let playerSortState = [defaultPlayerSort(), defaultPlayerSort()];
+  let saveHintTimer = null;
+  let nowLineTimer = null;
+  let pendingNameToggleTimer = null;
+
+  init();
+
+  function init() {
+    bindGlobalEvents();
+    renderAll();
+    saveState(false);
+    startNowLineTimer();
+  }
+
+  function bindGlobalEvents() {
+    el.matchNameInput.addEventListener("input", (event) => {
+      state.matchName = event.target.value;
+      saveState(false);
+    });
+
+    el.matchDateInput.addEventListener("input", (event) => {
+      state.matchDate = event.target.value;
+      saveState(false);
+    });
+
+    el.matchLocationInput.addEventListener("input", (event) => {
+      state.matchLocation = event.target.value;
+      saveState(false);
+    });
+
+    el.saveNowBtn.addEventListener("click", () => {
+      saveState(true);
+    });
+
+    el.exportBtn.addEventListener("click", downloadAutoBackupJson);
+    el.importBtn.addEventListener("click", () => {
+      el.importFileInput.click();
+    });
+    el.importFileInput.addEventListener("change", importFromFile);
+
+    el.resetBtn.addEventListener("click", () => {
+      const ok = window.confirm("모든 데이터를 초기화할까요? 기존 기록은 삭제됩니다.");
+      if (!ok) {
+        return;
+      }
+      state = defaultState();
+      editingPlayer = null;
+      playerSortState = [defaultPlayerSort(), defaultPlayerSort()];
+      renderAll();
+      saveState(true);
+    });
+
+    el.addCourtBtn.addEventListener("click", () => {
+      const nextNumber = state.courts.length + 1;
+      state.courts.push({
+        id: createId("court"),
+        name: `코트${nextNumber}`,
+      });
+      renderSchedule();
+      saveState(true);
+    });
+
+    el.applyTimeConfigBtn.addEventListener("click", applyTimeConfigFromInputs);
+
+    el.clubsContainer.addEventListener("submit", (event) => {
+      const form = event.target;
+      if (!form.classList.contains("player-form")) {
+        return;
+      }
+
+      event.preventDefault();
+      const clubIndex = Number(form.dataset.clubIndex);
+      if (!Number.isInteger(clubIndex)) {
+        return;
+      }
+
+      const rawNames = String(form.elements.namedItem("name").value || "").trim();
+      const gender = String(form.elements.namedItem("gender").value || "");
+
+      if (!rawNames || (gender !== "M" && gender !== "F")) {
+        window.alert("이름과 성별은 필수입니다.");
+        return;
+      }
+
+      const names = parseBulkPlayerNames(rawNames);
+      if (names.length === 0) {
+        window.alert("선수 이름을 입력해 주세요. 쉼표로 여러 명 입력할 수 있습니다.");
+        return;
+      }
+
+      names.forEach((name) => {
+        state.clubs[clubIndex].players.push({
+          id: createId("player"),
+          name,
+          gender,
+          experience: "",
+          age: "",
+        });
+      });
+
+      form.reset();
+      const hiddenGender = form.elements.namedItem("gender");
+      if (hiddenGender) {
+        hiddenGender.value = "M";
+      }
+      const addToggle = form.querySelector(".add-gender-toggle");
+      if (addToggle) {
+        setToggleActive(addToggle, "M");
+      }
+      editingPlayer = null;
+
+      renderClubs();
+      renderSchedule();
+      renderStats();
+      refreshModalIfOpen();
+      saveState(true);
+    });
+
+    el.clubsContainer.addEventListener("input", (event) => {
+      const target = event.target;
+
+      if (target.classList.contains("club-name-input")) {
+        const clubIndex = Number(target.dataset.clubIndex);
+        if (!Number.isInteger(clubIndex)) {
+          return;
+        }
+        state.clubs[clubIndex].name = target.value;
+        renderSchedule();
+        renderStats();
+        renderModalClubNames();
+        saveState(false);
+      }
+    });
+
+    el.clubsContainer.addEventListener("dblclick", (event) => {
+      const nameDisplay = event.target.closest(".player-name-display");
+      if (!nameDisplay) {
+        return;
+      }
+      clearPendingNameToggle();
+
+      const clubIndex = Number(nameDisplay.dataset.clubIndex);
+      const playerId = String(nameDisplay.dataset.playerId || "");
+      if (!Number.isInteger(clubIndex) || !playerId) {
+        return;
+      }
+
+      editingPlayer = { clubIndex, playerId };
+      renderClubs();
+    });
+
+    el.clubsContainer.addEventListener("keydown", (event) => {
+      const input = event.target.closest(".player-name-edit-input");
+      if (!input) {
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitPlayerNameEdit(input, { saveIfBlank: false });
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelPlayerNameEdit();
+      }
+    });
+
+    el.clubsContainer.addEventListener("focusout", (event) => {
+      const input = event.target.closest(".player-name-edit-input");
+      if (!input) {
+        return;
+      }
+
+      commitPlayerNameEdit(input, { saveIfBlank: false });
+    });
+
+    el.clubsContainer.addEventListener("click", (event) => {
+      const nameDisplay = event.target.closest(".player-name-display");
+      if (nameDisplay) {
+        const clubIndex = Number(nameDisplay.dataset.clubIndex);
+        const playerId = String(nameDisplay.dataset.playerId || "");
+        if (!Number.isInteger(clubIndex) || !playerId) {
+          return;
+        }
+
+        clearPendingNameToggle();
+        pendingNameToggleTimer = window.setTimeout(() => {
+          pendingNameToggleTimer = null;
+          togglePlayerGender(clubIndex, playerId);
+        }, 220);
+        return;
+      }
+
+      const genderBtn = event.target.closest(".gender-btn");
+      if (genderBtn) {
+        clearPendingNameToggle();
+        const toggle = genderBtn.closest(".gender-toggle");
+        if (!toggle) {
+          return;
+        }
+
+        const nextGender = genderBtn.dataset.genderValue;
+        if (nextGender !== "M" && nextGender !== "F") {
+          return;
+        }
+
+        setToggleActive(toggle, nextGender);
+
+        if (toggle.classList.contains("add-gender-toggle")) {
+          const hidden = toggle.querySelector("input[name='gender']");
+          if (hidden) {
+            hidden.value = nextGender;
+          }
+          return;
+        }
+
+        if (toggle.classList.contains("player-gender-toggle")) {
+          const clubIndex = Number(toggle.dataset.clubIndex);
+          const playerId = toggle.dataset.playerId;
+          updatePlayerGender(clubIndex, playerId, nextGender);
+          return;
+        }
+      }
+
+      const removeBtn = event.target.closest(".remove-player-btn");
+      if (removeBtn) {
+        clearPendingNameToggle();
+        const clubIndex = Number(removeBtn.dataset.clubIndex);
+        const playerId = removeBtn.dataset.playerId;
+        if (!Number.isInteger(clubIndex) || !playerId) {
+          return;
+        }
+
+        const player = findPlayerById(clubIndex, playerId);
+        if (!player) {
+          return;
+        }
+
+        const connectedMatches = countMatchesByPlayerId(playerId);
+        let message = `선수 \"${player.name || "이름없음"}\" 을(를) 삭제할까요?`;
+        if (connectedMatches > 0) {
+          message += `\n해당 선수는 ${connectedMatches}개 경기 슬롯에 배정되어 있어, 삭제 시 슬롯에서 자동 제거됩니다.`;
+        }
+
+        const ok = window.confirm(message);
+        if (!ok) {
+          return;
+        }
+
+        removePlayer(clubIndex, playerId);
+        renderAll();
+        saveState(true);
+      }
+    });
+
+    el.scheduleTable.addEventListener("click", (event) => {
+      const removeCourtBtn = event.target.closest(".court-remove-btn");
+      if (removeCourtBtn) {
+        const courtId = removeCourtBtn.dataset.courtId;
+        removeCourt(courtId);
+        return;
+      }
+
+      const slotBtn = event.target.closest(".slot-btn");
+      if (!slotBtn) {
+        return;
+      }
+
+      const slotKey = slotBtn.dataset.slotKey;
+      if (!slotKey) {
+        return;
+      }
+
+      openMatchModal(slotKey);
+    });
+
+    el.matchForm.addEventListener("click", handleModalPickerClick);
+    el.matchForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      saveMatchFromModal();
+    });
+
+    el.scoreAInput.addEventListener("input", updateMatchTypeBadgeFromModal);
+    el.scoreBInput.addEventListener("input", updateMatchTypeBadgeFromModal);
+
+    el.playerStats.addEventListener("click", (event) => {
+      const sortBtn = event.target.closest(".stats-sort-btn");
+      if (!sortBtn) {
+        return;
+      }
+
+      const clubIndex = Number(sortBtn.dataset.clubIndex);
+      const sortKey = String(sortBtn.dataset.sortKey || "");
+      if (!Number.isInteger(clubIndex) || clubIndex < 0 || clubIndex > 1) {
+        return;
+      }
+      if (!isValidPlayerSortKey(sortKey)) {
+        return;
+      }
+
+      updatePlayerSort(clubIndex, sortKey);
+      renderStats();
+    });
+
+    el.deleteMatchBtn.addEventListener("click", () => {
+      if (!activeSlotKey || !state.matches[activeSlotKey]) {
+        closeMatchModal();
+        return;
+      }
+      const ok = window.confirm("이 슬롯의 경기를 삭제할까요?");
+      if (!ok) {
+        return;
+      }
+
+      delete state.matches[activeSlotKey];
+      closeMatchModal();
+      renderSchedule();
+      renderStats();
+      saveState(true);
+    });
+
+    el.closeModalBtn.addEventListener("click", closeMatchModal);
+    el.cancelModalBtn.addEventListener("click", closeMatchModal);
+
+    el.matchModal.addEventListener("click", (event) => {
+      if (event.target === el.matchModal) {
+        closeMatchModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !el.matchModal.classList.contains("hidden")) {
+        closeMatchModal();
+      }
+    });
+
+    window.addEventListener("resize", syncNowLine);
+    el.tableWrap.addEventListener("scroll", syncNowLine);
+  }
+
+  function renderAll() {
+    renderMeta();
+    renderClubs();
+    renderSchedule();
+    renderStats();
+    renderModalClubNames();
+  }
+
+  function renderMeta() {
+    el.matchNameInput.value = state.matchName;
+    el.matchDateInput.value = state.matchDate;
+    el.matchLocationInput.value = state.matchLocation;
+
+    el.timeStartInput.value = state.timeConfig.start;
+    el.timeEndInput.value = state.timeConfig.end;
+    el.slotMinutesInput.value = String(state.timeConfig.interval);
+
+    renderSaveStatus();
+  }
+
+  function renderClubs() {
+    const html = state.clubs
+      .map((club, clubIndex) => {
+        const maleCount = club.players.filter((player) => player.gender === "M").length;
+        const femaleCount = club.players.filter((player) => player.gender === "F").length;
+        const totalCount = club.players.length;
+
+        const playerCards = club.players
+          .map(
+            (player) => {
+              const isEditingName =
+                editingPlayer &&
+                editingPlayer.clubIndex === clubIndex &&
+                editingPlayer.playerId === player.id;
+
+              return `
+            <div class="club-player-card ${genderClassName(player.gender)}">
+              <div class="player-name-editor">
+                ${
+                  isEditingName
+                    ? `
+                      <input
+                        class="inline-input player-name-edit-input"
+                        data-club-index="${clubIndex}"
+                        data-player-id="${escapeAttr(player.id)}"
+                        value="${escapeAttr(player.name)}"
+                        placeholder="이름"
+                      />
+                    `
+                    : `
+                      <button
+                        class="player-name-display"
+                        type="button"
+                        data-club-index="${clubIndex}"
+                        data-player-id="${escapeAttr(player.id)}"
+                        title="클릭: 성별 변경 · 더블클릭: 이름 수정"
+                      >
+                        ${escapeHtml(player.name || "이름없음")}
+                      </button>
+                    `
+                }
+                <button
+                  class="icon-danger remove-player-btn club-player-remove"
+                  type="button"
+                  data-club-index="${clubIndex}"
+                  data-player-id="${escapeAttr(player.id)}"
+                  aria-label="선수 삭제"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          `;
+            }
+          )
+          .join("");
+
+        return `
+          <article class="club-card">
+            <div class="club-card-head">
+              <h3>클럽 ${clubIndex + 1}</h3>
+              <input
+                class="club-name-input"
+                data-club-index="${clubIndex}"
+                value="${escapeAttr(club.name)}"
+                placeholder="클럽 이름"
+              />
+            </div>
+
+            <div class="club-counts">
+              <span class="count-pill male">남 ${maleCount}명</span>
+              <span class="count-pill female">여 ${femaleCount}명</span>
+              <span class="count-pill total">총 ${totalCount}명</span>
+            </div>
+
+            <form class="player-form" data-club-index="${clubIndex}">
+              <div class="player-form-grid">
+                <label class="field compact">
+                  <span>이름 *</span>
+                  <input name="name" type="text" required placeholder="예: 민수,태훈,준호" />
+                </label>
+
+                <label class="field compact">
+                  <span>성별 *</span>
+                  ${renderGenderToggleHtml({
+                    gender: "M",
+                    className: "add-gender-toggle",
+                    attrs: `data-club-index="${clubIndex}"`,
+                    maleLabel: "♂",
+                    femaleLabel: "♀",
+                    withHiddenInput: true,
+                  })}
+                </label>
+              </div>
+
+              <div class="player-actions">
+                <button class="btn btn-primary add-player-btn" type="submit" aria-label="선수 추가">👤+</button>
+              </div>
+            </form>
+
+            <div class="club-player-box ${playerCards ? "" : "empty"}">
+              ${
+                playerCards ||
+                `<div class="empty-note">등록된 선수가 없습니다.</div>`
+              }
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+
+    el.clubsContainer.innerHTML = html;
+    focusEditingPlayerInput();
+  }
+
+  function renderGenderToggleHtml({
+    gender,
+    className = "",
+    attrs = "",
+    maleLabel = "남",
+    femaleLabel = "여",
+    withHiddenInput = false,
+  }) {
+    const current = gender === "F" ? "F" : "M";
+
+    return `
+      <div class="gender-toggle ${escapeAttr(className)}" ${attrs}>
+        <button type="button" class="gender-btn ${current === "M" ? "active" : ""}" data-gender-value="M">${escapeHtml(
+      maleLabel
+    )}</button>
+        <button type="button" class="gender-btn ${current === "F" ? "active" : ""}" data-gender-value="F">${escapeHtml(
+      femaleLabel
+    )}</button>
+        ${withHiddenInput ? `<input type="hidden" name="gender" value="${current}" />` : ""}
+      </div>
+    `;
+  }
+
+  function setToggleActive(toggle, gender) {
+    const nextGender = gender === "F" ? "F" : "M";
+    const buttons = toggle.querySelectorAll(".gender-btn");
+    buttons.forEach((button) => {
+      button.classList.toggle("active", button.dataset.genderValue === nextGender);
+    });
+  }
+
+  function defaultPlayerSort() {
+    return { key: "wins", dir: "desc" };
+  }
+
+  function isValidPlayerSortKey(key) {
+    return ["name", "played", "wins", "losses", "winRate"].includes(key);
+  }
+
+  function updatePlayerSort(clubIndex, key) {
+    const current = playerSortState[clubIndex] || defaultPlayerSort();
+    const defaultDir = key === "name" ? "asc" : "desc";
+    const nextDir = current.key === key ? (current.dir === "asc" ? "desc" : "asc") : defaultDir;
+    playerSortState[clubIndex] = { key, dir: nextDir };
+  }
+
+  function renderPlayerSortHeader(clubIndex, key, label, sortState) {
+    const active = sortState.key === key;
+    const arrow = active ? (sortState.dir === "asc" ? "↑" : "↓") : "↕";
+    return `
+      <button
+        class="stats-sort-btn ${active ? "active" : ""}"
+        type="button"
+        data-club-index="${clubIndex}"
+        data-sort-key="${key}"
+      >
+        ${escapeHtml(label)} <span class="stats-sort-arrow">${arrow}</span>
+      </button>
+    `;
+  }
+
+  function comparePlayersBySort(a, b, sortState) {
+    const { key, dir } = sortState || defaultPlayerSort();
+    const sign = dir === "asc" ? 1 : -1;
+
+    let result = 0;
+    if (key === "name") {
+      result = String(a.name || "").localeCompare(String(b.name || ""), "ko-KR");
+    } else {
+      const avRaw = Number(a[key]);
+      const bvRaw = Number(b[key]);
+      const av = Number.isFinite(avRaw) ? avRaw : 0;
+      const bv = Number.isFinite(bvRaw) ? bvRaw : 0;
+      result = av - bv;
+    }
+
+    if (result === 0) {
+      result = Number(a.wins) - Number(b.wins);
+    }
+    if (result === 0) {
+      result = String(a.name || "").localeCompare(String(b.name || ""), "ko-KR");
+    }
+    if (result === 0) {
+      result = String(a.id || "").localeCompare(String(b.id || ""));
+    }
+
+    return result * sign;
+  }
+
+  function parseBulkPlayerNames(rawNames) {
+    return String(rawNames || "")
+      .split(/[,，\n]/)
+      .map((name) => name.trim())
+      .filter(Boolean);
+  }
+
+  function focusEditingPlayerInput() {
+    if (!editingPlayer) {
+      return;
+    }
+
+    const selector = `.player-name-edit-input[data-club-index="${editingPlayer.clubIndex}"][data-player-id="${editingPlayer.playerId}"]`;
+    const input = el.clubsContainer.querySelector(selector);
+    if (!input) {
+      editingPlayer = null;
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
+  function commitPlayerNameEdit(input, { saveIfBlank = false } = {}) {
+    if (!input) {
+      return;
+    }
+
+    const clubIndex = Number(input.dataset.clubIndex);
+    const playerId = String(input.dataset.playerId || "");
+    const player = findPlayerById(clubIndex, playerId);
+    if (!player) {
+      editingPlayer = null;
+      renderClubs();
+      return;
+    }
+
+    const nextName = String(input.value || "").trim();
+    const prevName = String(player.name || "");
+
+    if (!nextName && !saveIfBlank) {
+      editingPlayer = null;
+      renderClubs();
+      return;
+    }
+
+    editingPlayer = null;
+
+    if (nextName && nextName !== prevName) {
+      player.name = nextName;
+      renderClubs();
+      renderSchedule();
+      renderStats();
+      refreshModalIfOpen();
+      saveState(false);
+      return;
+    }
+
+    renderClubs();
+  }
+
+  function cancelPlayerNameEdit() {
+    if (!editingPlayer) {
+      return;
+    }
+    editingPlayer = null;
+    renderClubs();
+  }
+
+  function clearPendingNameToggle() {
+    if (pendingNameToggleTimer) {
+      window.clearTimeout(pendingNameToggleTimer);
+      pendingNameToggleTimer = null;
+    }
+  }
+
+  function togglePlayerGender(clubIndex, playerId) {
+    const player = findPlayerById(clubIndex, playerId);
+    if (!player) {
+      return;
+    }
+
+    const nextGender = player.gender === "F" ? "M" : "F";
+    updatePlayerGender(clubIndex, playerId, nextGender);
+  }
+
+  function updatePlayerGender(clubIndex, playerId, nextGender) {
+    if (!Number.isInteger(clubIndex) || !playerId) {
+      return;
+    }
+    if (nextGender !== "M" && nextGender !== "F") {
+      return;
+    }
+
+    const player = findPlayerById(clubIndex, playerId);
+    if (!player || player.gender === nextGender) {
+      return;
+    }
+
+    player.gender = nextGender;
+    renderClubs();
+    renderSchedule();
+    renderStats();
+    refreshModalIfOpen();
+    saveState(false);
+  }
+
+  function renderSchedule() {
+    const canDeleteCourt = state.courts.length > 1;
+
+    const headHtml = state.courts
+      .map(
+        (court, courtIndex) => `
+          <th>
+            <div class="court-head">
+              <div>
+                <strong>코트 ${courtIndex + 1}</strong>
+                <small>${escapeHtml(court.name || "")}</small>
+              </div>
+              ${
+                canDeleteCourt
+                  ? `<button class="court-remove-btn" type="button" data-court-id="${escapeAttr(
+                      court.id
+                    )}" aria-label="코트 삭제">×</button>`
+                  : ""
+              }
+            </div>
+          </th>
+        `
+      )
+      .join("");
+
+    const bodyHtml = state.times
+      .map((timeLabel, timeIndex) => {
+        const cells = state.courts
+          .map((court) => {
+            const slotKey = makeSlotKey(timeIndex, court.id);
+            const match = state.matches[slotKey];
+
+            if (!match) {
+              return `
+                <td>
+                  <button class="slot-btn empty" type="button" data-slot-key="${escapeAttr(slotKey)}">
+                    + 경기 추가
+                  </button>
+                </td>
+              `;
+            }
+
+            const type = getMatchType(match);
+            const clubAName = state.clubs[0].name || "클럽 1";
+            const clubBName = state.clubs[1].name || "클럽 2";
+            const pairAHtml = renderPairPlayersHtml(0, match.clubAPlayerIds);
+            const pairBHtml = renderPairPlayersHtml(1, match.clubBPlayerIds);
+
+            const scoreHtml = isCompletedScore(match)
+              ? `<span class="slot-score">${escapeHtml(String(toSafeNumber(match.scoreA)))} : ${escapeHtml(
+                  String(toSafeNumber(match.scoreB))
+                )}</span>`
+              : `<span class="slot-score pending">결과 미입력</span>`;
+
+            return `
+              <td>
+                <button
+                  class="slot-btn filled type-${type.code}"
+                  type="button"
+                  data-slot-key="${escapeAttr(slotKey)}"
+                >
+                  <div class="slot-inner">
+                    <div class="slot-side">
+                      <span class="slot-club">${escapeHtml(clubAName)}</span>
+                      <div class="slot-pair">${pairAHtml}</div>
+                    </div>
+                    <div class="slot-vs">
+                      <span class="vs-icon">⚔</span>
+                      ${scoreHtml}
+                    </div>
+                    <div class="slot-side align-right">
+                      <span class="slot-club">${escapeHtml(clubBName)}</span>
+                      <div class="slot-pair">${pairBHtml}</div>
+                    </div>
+                  </div>
+                </button>
+              </td>
+            `;
+          })
+          .join("");
+
+        return `
+          <tr data-time-index="${timeIndex}">
+            <th class="time-cell time-col">${escapeHtml(timeLabel)}</th>
+            ${cells}
+          </tr>
+        `;
+      })
+      .join("");
+
+    el.scheduleTable.innerHTML = `
+      <thead>
+        <tr>
+          <th class="time-col">시간</th>
+          ${headHtml}
+        </tr>
+      </thead>
+      <tbody>
+        ${bodyHtml}
+      </tbody>
+    `;
+
+    syncNowLine();
+  }
+
+  function renderStats() {
+    const stats = computeStats();
+    renderTrendGraph(stats.trendSeries);
+
+    const clubCards = state.clubs
+      .map((club, index) => {
+        const item = stats.clubStats[index];
+        return `
+          <article class="stat-card">
+            <h3>${escapeHtml(club.name || `클럽 ${index + 1}`)}</h3>
+            <p>전적: <strong>${item.wins}승 ${item.losses}패 ${item.draws}무</strong> (${item.played}경기)</p>
+            <p>게임 득실: <strong>${item.gamesFor}</strong> / <strong>${item.gamesAgainst}</strong> (득실차 ${item.diff})</p>
+          </article>
+        `;
+      })
+      .join("");
+
+    el.clubStats.innerHTML = clubCards;
+
+    if (stats.topPlayers.length === 0) {
+      el.topWinnerBox.innerHTML = "최다승: 아직 결과 입력된 경기가 없습니다.";
+    } else {
+      const topHtml = stats.topPlayers
+        .map((item) => `<span>${renderPlayerLabelHtml(item.name, item.gender)} ${item.wins}승</span>`)
+        .join(" ");
+
+      el.topWinnerBox.innerHTML = `최다승: <span class="top-player-list">${topHtml}</span>`;
+    }
+
+    const playerCards = state.clubs
+      .map((club, clubIndex) => {
+        const sortState = playerSortState[clubIndex] || defaultPlayerSort();
+        const sortedPlayers = stats.players
+          .filter((item) => item.clubIndex === clubIndex)
+          .sort((a, b) => comparePlayersBySort(a, b, sortState));
+
+        const rows = sortedPlayers
+          .map(
+            (item) => `
+            <tr>
+              <td>${renderPlayerLabelHtml(item.name, item.gender)}</td>
+              <td>${item.played}</td>
+              <td>${item.wins}</td>
+              <td>${item.losses}</td>
+              <td>${item.winRate.toFixed(1)}%</td>
+            </tr>
+          `
+          )
+          .join("");
+
+        return `
+          <article class="player-stats-card">
+            <h4>${escapeHtml(club.name || `클럽 ${clubIndex + 1}`)} 선수 승률</h4>
+            <table class="player-stats-table">
+              <thead>
+                <tr>
+                  <th>${renderPlayerSortHeader(clubIndex, "name", "선수", sortState)}</th>
+                  <th>${renderPlayerSortHeader(clubIndex, "played", "경기", sortState)}</th>
+                  <th>${renderPlayerSortHeader(clubIndex, "wins", "승", sortState)}</th>
+                  <th>${renderPlayerSortHeader(clubIndex, "losses", "패", sortState)}</th>
+                  <th>${renderPlayerSortHeader(clubIndex, "winRate", "승률", sortState)}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || `<tr><td colspan="5">결과가 입력된 경기가 없습니다.</td></tr>`}
+              </tbody>
+            </table>
+          </article>
+        `;
+      })
+      .join("");
+
+    el.playerStats.innerHTML = playerCards;
+  }
+
+  function renderModalClubNames() {
+    const clubAName = state.clubs[0]?.name || "클럽 1";
+    const clubBName = state.clubs[1]?.name || "클럽 2";
+
+    el.clubAName.textContent = clubAName;
+    el.clubBName.textContent = clubBName;
+    el.scoreLabelA.textContent = `${clubAName} 점수`;
+    el.scoreLabelB.textContent = `${clubBName} 점수`;
+  }
+
+  function openMatchModal(slotKey) {
+    const parsed = parseSlotKey(slotKey);
+    if (!parsed) {
+      return;
+    }
+
+    const { timeIndex, courtId } = parsed;
+    const courtIndex = state.courts.findIndex((court) => court.id === courtId);
+    if (courtIndex < 0) {
+      return;
+    }
+
+    activeSlotKey = slotKey;
+    const match = normalizeMatch(state.matches[slotKey] || emptyMatch());
+
+    modalDraft = {
+      clubASelected: compactPlayerIds(match.clubAPlayerIds),
+      clubBSelected: compactPlayerIds(match.clubBPlayerIds),
+      scoreA: match.scoreA,
+      scoreB: match.scoreB,
+      memo: match.memo,
+    };
+
+    renderModalClubNames();
+
+    const timeLabel = state.times[timeIndex] || "시간 미정";
+    el.modalTitle.textContent = `${timeLabel} · 코트 ${courtIndex + 1}`;
+
+    el.scoreAInput.value = modalDraft.scoreA;
+    el.scoreBInput.value = modalDraft.scoreB;
+    el.matchMemoInput.value = modalDraft.memo;
+
+    el.deleteMatchBtn.style.visibility = state.matches[slotKey] ? "visible" : "hidden";
+
+    renderModalPicker(0);
+    renderModalPicker(1);
+    updateMatchTypeBadgeFromModal();
+
+    el.matchModal.classList.remove("hidden");
+    el.matchModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeMatchModal() {
+    activeSlotKey = null;
+    modalDraft = null;
+    el.matchModal.classList.add("hidden");
+    el.matchModal.setAttribute("aria-hidden", "true");
+  }
+
+  function handleModalPickerClick(event) {
+    const actionTarget = event.target.closest("[data-action]");
+    if (!actionTarget) {
+      return;
+    }
+
+    const action = actionTarget.dataset.action;
+    const clubIndex = Number(actionTarget.dataset.clubIndex);
+    const playerId = actionTarget.dataset.playerId;
+
+    if (!Number.isInteger(clubIndex) || !playerId) {
+      return;
+    }
+
+    if (action === "pick-player") {
+      addPlayerToModalSelection(clubIndex, playerId);
+      return;
+    }
+
+    if (action === "remove-selected") {
+      removePlayerFromModalSelection(clubIndex, playerId);
+    }
+  }
+
+  function addPlayerToModalSelection(clubIndex, playerId) {
+    if (!modalDraft) {
+      return;
+    }
+
+    const list = getModalSelectedRef(clubIndex);
+    if (!list) {
+      return;
+    }
+
+    if (list.includes(playerId)) {
+      return;
+    }
+
+    if (list.length >= 2) {
+      list.shift();
+    }
+    list.push(playerId);
+
+    renderModalPicker(clubIndex);
+    updateMatchTypeBadgeFromModal();
+  }
+
+  function removePlayerFromModalSelection(clubIndex, playerId) {
+    if (!modalDraft) {
+      return;
+    }
+
+    const list = getModalSelectedRef(clubIndex);
+    if (!list) {
+      return;
+    }
+
+    const index = list.indexOf(playerId);
+    if (index < 0) {
+      return;
+    }
+
+    list.splice(index, 1);
+    renderModalPicker(clubIndex);
+    updateMatchTypeBadgeFromModal();
+  }
+
+  function getModalSelectedRef(clubIndex) {
+    if (!modalDraft) {
+      return null;
+    }
+    if (clubIndex === 0) {
+      return modalDraft.clubASelected;
+    }
+    if (clubIndex === 1) {
+      return modalDraft.clubBSelected;
+    }
+    return null;
+  }
+
+  function renderModalPicker(clubIndex) {
+    if (!modalDraft) {
+      return;
+    }
+
+    const selected = clubIndex === 0 ? modalDraft.clubASelected : modalDraft.clubBSelected;
+    const selectedEl = clubIndex === 0 ? el.clubASelected : el.clubBSelected;
+    const poolEl = clubIndex === 0 ? el.clubAPlayerPool : el.clubBPlayerPool;
+
+    if (selected.length === 0) {
+      selectedEl.classList.add("empty");
+      selectedEl.innerHTML = "선수를 선택하세요 (최대 2명)";
+    } else {
+      selectedEl.classList.remove("empty");
+      selectedEl.innerHTML = selected
+        .map((playerId) => {
+          const player = findPlayerById(clubIndex, playerId);
+          const name = player?.name || "삭제된 선수";
+          const gender = player?.gender || "";
+          const className = genderClassName(gender);
+
+          return `
+            <div class="selected-chip ${className}">
+              ${renderPlayerLabelHtml(name, gender)}
+              <button
+                class="selected-chip-x"
+                type="button"
+                data-action="remove-selected"
+                data-club-index="${clubIndex}"
+                data-player-id="${escapeAttr(playerId)}"
+                aria-label="선수 제거"
+              >
+                ×
+              </button>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    const poolHtml = state.clubs[clubIndex].players
+      .map((player) => {
+        const isSelected = selected.includes(player.id);
+
+        return `
+          <button
+            class="pool-player-btn ${isSelected ? "selected" : ""}"
+            type="button"
+            data-action="pick-player"
+            data-club-index="${clubIndex}"
+            data-player-id="${escapeAttr(player.id)}"
+            ${isSelected ? "disabled" : ""}
+          >
+            ${renderPlayerLabelHtml(player.name || "이름없음", player.gender)}
+          </button>
+        `;
+      })
+      .join("");
+
+    poolEl.innerHTML = poolHtml || `<div class="empty-note">등록된 선수가 없습니다.</div>`;
+  }
+
+  function saveMatchFromModal() {
+    if (!activeSlotKey || !modalDraft) {
+      return;
+    }
+
+    const clubASelected = compactPlayerIds(modalDraft.clubASelected);
+    const clubBSelected = compactPlayerIds(modalDraft.clubBSelected);
+
+    if (clubASelected.length < 2 || clubBSelected.length < 2) {
+      window.alert("각 클럽 선수 2명씩 선택해야 합니다.");
+      return;
+    }
+
+    if (clubASelected[0] === clubASelected[1]) {
+      window.alert("클럽 1 선수는 서로 달라야 합니다.");
+      return;
+    }
+
+    if (clubBSelected[0] === clubBSelected[1]) {
+      window.alert("클럽 2 선수는 서로 달라야 합니다.");
+      return;
+    }
+
+    state.matches[activeSlotKey] = normalizeMatch({
+      clubAPlayerIds: [clubASelected[0], clubASelected[1]],
+      clubBPlayerIds: [clubBSelected[0], clubBSelected[1]],
+      scoreA: el.scoreAInput.value.trim(),
+      scoreB: el.scoreBInput.value.trim(),
+      memo: el.matchMemoInput.value.trim(),
+    });
+
+    closeMatchModal();
+    renderSchedule();
+    renderStats();
+    saveState(true);
+  }
+
+  function updateMatchTypeBadgeFromModal() {
+    if (!modalDraft) {
+      return;
+    }
+
+    const draft = normalizeMatch({
+      clubAPlayerIds: [modalDraft.clubASelected[0] || "", modalDraft.clubASelected[1] || ""],
+      clubBPlayerIds: [modalDraft.clubBSelected[0] || "", modalDraft.clubBSelected[1] || ""],
+      scoreA: el.scoreAInput.value.trim(),
+      scoreB: el.scoreBInput.value.trim(),
+      memo: el.matchMemoInput.value.trim(),
+    });
+
+    const type = getMatchType(draft);
+    el.matchTypeBadge.textContent = type.label;
+    el.matchTypeBadge.className = `type-badge type-${type.code}`;
+  }
+
+  function refreshModalIfOpen() {
+    if (el.matchModal.classList.contains("hidden") || !modalDraft) {
+      return;
+    }
+
+    modalDraft.clubASelected = modalDraft.clubASelected.filter((id) => !!findPlayerById(0, id));
+    modalDraft.clubBSelected = modalDraft.clubBSelected.filter((id) => !!findPlayerById(1, id));
+    renderModalPicker(0);
+    renderModalPicker(1);
+    updateMatchTypeBadgeFromModal();
+  }
+
+  function removeCourt(courtId) {
+    if (!courtId) {
+      return;
+    }
+
+    if (state.courts.length <= 1) {
+      window.alert("코트는 최소 1개 이상 필요합니다.");
+      return;
+    }
+
+    const target = state.courts.find((court) => court.id === courtId);
+    if (!target) {
+      return;
+    }
+
+    const ok = window.confirm(`\"${target.name || "코트"}\"를 삭제할까요? 해당 코트 경기 기록도 함께 삭제됩니다.`);
+    if (!ok) {
+      return;
+    }
+
+    state.courts = state.courts.filter((court) => court.id !== courtId);
+
+    const nextMatches = {};
+    Object.entries(state.matches).forEach(([slotKey, match]) => {
+      const parsed = parseSlotKey(slotKey);
+      if (!parsed || parsed.courtId === courtId) {
+        return;
+      }
+      nextMatches[slotKey] = match;
+    });
+
+    state.matches = nextMatches;
+    renderSchedule();
+    renderStats();
+    saveState(true);
+  }
+
+  function applyTimeConfigFromInputs() {
+    const start = String(el.timeStartInput.value || "").trim();
+    const end = String(el.timeEndInput.value || "").trim();
+    const interval = Math.floor(Number(el.slotMinutesInput.value));
+
+    const nextSlots = generateTimeSlots(start, end, interval);
+    if (!nextSlots) {
+      window.alert("시간 설정이 올바르지 않습니다. 시작/종료 시간과 간격(분)을 확인해 주세요.");
+      return;
+    }
+
+    if (nextSlots.length === 0) {
+      window.alert("생성 가능한 경기 시간이 없습니다.");
+      return;
+    }
+
+    const oldMatches = state.matches;
+    const oldLength = state.times.length;
+    const nextMatches = {};
+
+    state.courts.forEach((court) => {
+      const keepCount = Math.min(oldLength, nextSlots.length);
+      for (let i = 0; i < keepCount; i += 1) {
+        const oldKey = makeSlotKey(i, court.id);
+        const newKey = makeSlotKey(i, court.id);
+        if (oldMatches[oldKey]) {
+          nextMatches[newKey] = oldMatches[oldKey];
+        }
+      }
+    });
+
+    state.timeConfig = {
+      start,
+      end,
+      interval,
+    };
+    state.times = nextSlots;
+    state.matches = nextMatches;
+
+    renderSchedule();
+    renderStats();
+    saveState(true);
+  }
+
+  function computeStats() {
+    const clubStats = state.clubs.map(() => ({
+      played: 0,
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      gamesFor: 0,
+      gamesAgainst: 0,
+      diff: 0,
+    }));
+
+    const playersMap = new Map();
+
+    state.clubs.forEach((club, clubIndex) => {
+      club.players.forEach((player) => {
+        playersMap.set(player.id, {
+          id: player.id,
+          name: player.name || "이름없음",
+          gender: player.gender,
+          clubIndex,
+          played: 0,
+          wins: 0,
+          losses: 0,
+          draws: 0,
+          winRate: 0,
+        });
+      });
+    });
+
+    Object.values(state.matches).forEach((match) => {
+      if (!isCompletedScore(match)) {
+        return;
+      }
+
+      const scoreA = toSafeNumber(match.scoreA);
+      const scoreB = toSafeNumber(match.scoreB);
+
+      clubStats[0].played += 1;
+      clubStats[1].played += 1;
+      clubStats[0].gamesFor += scoreA;
+      clubStats[0].gamesAgainst += scoreB;
+      clubStats[1].gamesFor += scoreB;
+      clubStats[1].gamesAgainst += scoreA;
+
+      let winner = -1;
+      if (scoreA > scoreB) {
+        clubStats[0].wins += 1;
+        clubStats[1].losses += 1;
+        winner = 0;
+      } else if (scoreB > scoreA) {
+        clubStats[1].wins += 1;
+        clubStats[0].losses += 1;
+        winner = 1;
+      } else {
+        clubStats[0].draws += 1;
+        clubStats[1].draws += 1;
+      }
+
+      updatePlayersByResult(match.clubAPlayerIds, 0, winner, playersMap);
+      updatePlayersByResult(match.clubBPlayerIds, 1, winner, playersMap);
+    });
+
+    clubStats.forEach((item) => {
+      item.diff = item.gamesFor - item.gamesAgainst;
+    });
+
+    const players = Array.from(playersMap.values());
+    players.forEach((player) => {
+      player.winRate = player.played ? (player.wins / player.played) * 100 : 0;
+    });
+
+    const maxWins = players.reduce((acc, item) => Math.max(acc, item.wins), 0);
+    const topPlayers = maxWins ? players.filter((item) => item.wins === maxWins) : [];
+    const trendSeries = buildTrendSeries();
+
+    return { clubStats, players, topPlayers, trendSeries };
+  }
+
+  function buildTrendSeries() {
+    const trendSeries = [
+      {
+        label: "시작",
+        matchDelta: 0,
+        gameDelta: 0,
+      },
+    ];
+
+    let matchDelta = 0;
+    let gameDelta = 0;
+
+    state.times.forEach((timeLabel, timeIndex) => {
+      state.courts.forEach((court, courtIndex) => {
+        const slotKey = makeSlotKey(timeIndex, court.id);
+        const match = state.matches[slotKey];
+        if (!match || !isCompletedScore(match)) {
+          return;
+        }
+
+        const scoreA = toSafeNumber(match.scoreA);
+        const scoreB = toSafeNumber(match.scoreB);
+
+        if (scoreA > scoreB) {
+          matchDelta += 1;
+        } else if (scoreB > scoreA) {
+          matchDelta -= 1;
+        }
+
+        gameDelta += scoreA - scoreB;
+
+        trendSeries.push({
+          label: `${timeLabel} · 코트 ${courtIndex + 1}`,
+          matchDelta,
+          gameDelta,
+          scoreA,
+          scoreB,
+        });
+      });
+    });
+
+    return trendSeries;
+  }
+
+  function renderTrendGraph(trendSeries) {
+    if (!el.trendGraphWrap || !el.trendGraphHint) {
+      return;
+    }
+
+    const clubAName = state.clubs[0]?.name || "좌측 클럽";
+    const clubBName = state.clubs[1]?.name || "우측 클럽";
+
+    if (!Array.isArray(trendSeries) || trendSeries.length <= 1) {
+      el.trendGraphWrap.innerHTML = `<div class="empty-note">결과가 입력된 경기가 없어 그래프를 그릴 수 없습니다.</div>`;
+      el.trendGraphHint.textContent = "점수를 입력하면 시간 흐름 그래프가 자동으로 갱신됩니다.";
+      return;
+    }
+
+    const width = 980;
+    const height = 300;
+    const paddingX = 52;
+    const paddingY = 26;
+    const centerY = height / 2;
+    const innerWidth = width - paddingX * 2;
+    const maxAbs = Math.max(
+      1,
+      ...trendSeries.map((point) => Math.abs(point.matchDelta)),
+      ...trendSeries.map((point) => Math.abs(point.gameDelta))
+    );
+    const yScale = (height / 2 - paddingY) / maxAbs;
+    const xStep = trendSeries.length > 1 ? innerWidth / (trendSeries.length - 1) : 0;
+
+    const toX = (index) => paddingX + xStep * index;
+    const toY = (value) => centerY - value * yScale;
+
+    const matchPoints = trendSeries
+      .map((point, index) => `${toX(index).toFixed(2)},${toY(point.matchDelta).toFixed(2)}`)
+      .join(" ");
+    const gamePoints = trendSeries
+      .map((point, index) => `${toX(index).toFixed(2)},${toY(point.gameDelta).toFixed(2)}`)
+      .join(" ");
+
+    const labels = trendSeries
+      .map((point, index) => {
+        const labelStep = Math.max(1, Math.ceil(trendSeries.length / 6));
+        if (index !== 0 && index !== trendSeries.length - 1 && index % labelStep !== 0) {
+          return "";
+        }
+
+        const x = toX(index);
+        const y = height - 8;
+        const text = index === 0 ? "시작" : `#${index}`;
+        return `<text class="trend-x-label" x="${x.toFixed(2)}" y="${y}" text-anchor="middle">${escapeHtml(text)}</text>`;
+      })
+      .join("");
+
+    const matchDots = trendSeries
+      .map((point, index) => {
+        const x = toX(index).toFixed(2);
+        const y = toY(point.matchDelta).toFixed(2);
+        const title = `${point.label}\n승패차: ${formatSigned(point.matchDelta)}\n득실차: ${formatSigned(point.gameDelta)}`;
+        return `<circle class="trend-dot trend-dot-match" cx="${x}" cy="${y}" r="3.4"><title>${escapeHtml(title)}</title></circle>`;
+      })
+      .join("");
+
+    const gameDots = trendSeries
+      .map((point, index) => {
+        const x = toX(index).toFixed(2);
+        const y = toY(point.gameDelta).toFixed(2);
+        const title = `${point.label}\n승패차: ${formatSigned(point.matchDelta)}\n득실차: ${formatSigned(point.gameDelta)}`;
+        return `<circle class="trend-dot trend-dot-game" cx="${x}" cy="${y}" r="2.8"><title>${escapeHtml(title)}</title></circle>`;
+      })
+      .join("");
+
+    const topGuideY = toY(maxAbs).toFixed(2);
+    const bottomGuideY = toY(-maxAbs).toFixed(2);
+
+    el.trendGraphWrap.innerHTML = `
+      <div class="trend-legend">
+        <span class="trend-legend-item trend-legend-match">승패 흐름</span>
+        <span class="trend-legend-item trend-legend-game">득실차</span>
+      </div>
+      <svg class="trend-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="시간 흐름 그래프">
+        <line class="trend-grid-line" x1="${paddingX}" y1="${topGuideY}" x2="${width - paddingX}" y2="${topGuideY}" />
+        <line class="trend-grid-line trend-grid-zero" x1="${paddingX}" y1="${centerY}" x2="${width - paddingX}" y2="${centerY}" />
+        <line class="trend-grid-line" x1="${paddingX}" y1="${bottomGuideY}" x2="${width - paddingX}" y2="${bottomGuideY}" />
+        <text class="trend-side-label trend-side-up" x="${paddingX + 6}" y="18">${escapeHtml(clubAName)} 우세 ▲</text>
+        <text class="trend-side-label trend-side-down" x="${paddingX + 6}" y="${height - 20}">${escapeHtml(clubBName)} 우세 ▼</text>
+        <text class="trend-zero-label" x="${paddingX - 14}" y="${centerY + 4}">0</text>
+        <polyline class="trend-line trend-line-match" points="${matchPoints}" />
+        <polyline class="trend-line trend-line-game" points="${gamePoints}" />
+        ${matchDots}
+        ${gameDots}
+        ${labels}
+      </svg>
+    `;
+
+    const latest = trendSeries[trendSeries.length - 1];
+    el.trendGraphHint.textContent = `현재 누적: 승패차 ${formatSigned(latest.matchDelta)}, 득실차 ${formatSigned(
+      latest.gameDelta
+    )}`;
+  }
+
+  function updatePlayersByResult(playerIds, clubIndex, winner, playersMap) {
+    playerIds.forEach((playerId) => {
+      if (!playerId) {
+        return;
+      }
+
+      const fallbackPlayer = findPlayerById(clubIndex, playerId);
+      if (!playersMap.has(playerId)) {
+        playersMap.set(playerId, {
+          id: playerId,
+          name: fallbackPlayer?.name || "삭제된 선수",
+          gender: fallbackPlayer?.gender || "",
+          clubIndex,
+          played: 0,
+          wins: 0,
+          losses: 0,
+          draws: 0,
+          winRate: 0,
+        });
+      }
+
+      const target = playersMap.get(playerId);
+      target.played += 1;
+
+      if (winner === -1) {
+        target.draws += 1;
+      } else if (winner === clubIndex) {
+        target.wins += 1;
+      } else {
+        target.losses += 1;
+      }
+    });
+  }
+
+  function getMatchType(match) {
+    const gendersA = match.clubAPlayerIds.map((id) => findPlayerById(0, id)?.gender).filter(Boolean);
+    const gendersB = match.clubBPlayerIds.map((id) => findPlayerById(1, id)?.gender).filter(Boolean);
+
+    if (gendersA.length < 2 || gendersB.length < 2) {
+      return MATCH_TYPE.pending;
+    }
+
+    const all = [...gendersA, ...gendersB];
+
+    if (all.every((gender) => gender === "M")) {
+      return MATCH_TYPE.male;
+    }
+
+    if (all.every((gender) => gender === "F")) {
+      return MATCH_TYPE.female;
+    }
+
+    const teamAMixed = new Set(gendersA).size === 2;
+    const teamBMixed = new Set(gendersB).size === 2;
+
+    if (teamAMixed && teamBMixed) {
+      return MATCH_TYPE.mixed;
+    }
+
+    return MATCH_TYPE.open;
+  }
+
+  function renderPairPlayersHtml(clubIndex, playerIds) {
+    return playerIds
+      .map((playerId) => {
+        if (!playerId) {
+          return renderPlayerLabelHtml("미정", "");
+        }
+
+        const player = findPlayerById(clubIndex, playerId);
+        if (!player) {
+          return renderPlayerLabelHtml("삭제된 선수", "");
+        }
+
+        return renderPlayerLabelHtml(player.name || "이름없음", player.gender);
+      })
+      .join("");
+  }
+
+  function renderPlayerLabelHtml(name, gender) {
+    const cls = genderClassName(gender);
+
+    return `<span class="player-label ${cls}"><span class="player-label-name">${escapeHtml(name)}</span></span>`;
+  }
+
+  function genderClassName(gender) {
+    if (gender === "M") {
+      return "gender-m";
+    }
+    if (gender === "F") {
+      return "gender-f";
+    }
+    return "gender-u";
+  }
+
+  function removePlayer(clubIndex, playerId) {
+    const club = state.clubs[clubIndex];
+    club.players = club.players.filter((item) => item.id !== playerId);
+
+    Object.keys(state.matches).forEach((slotKey) => {
+      const match = state.matches[slotKey];
+      state.matches[slotKey] = {
+        ...match,
+        clubAPlayerIds: match.clubAPlayerIds.map((id) => (id === playerId ? "" : id)),
+        clubBPlayerIds: match.clubBPlayerIds.map((id) => (id === playerId ? "" : id)),
+      };
+    });
+
+    if (modalDraft) {
+      modalDraft.clubASelected = modalDraft.clubASelected.filter((id) => id !== playerId);
+      modalDraft.clubBSelected = modalDraft.clubBSelected.filter((id) => id !== playerId);
+    }
+
+    if (editingPlayer && editingPlayer.playerId === playerId && editingPlayer.clubIndex === clubIndex) {
+      editingPlayer = null;
+    }
+  }
+
+  function countMatchesByPlayerId(playerId) {
+    let count = 0;
+
+    Object.values(state.matches).forEach((match) => {
+      if (match.clubAPlayerIds.includes(playerId) || match.clubBPlayerIds.includes(playerId)) {
+        count += 1;
+      }
+    });
+
+    return count;
+  }
+
+  function findPlayerById(clubIndex, playerId) {
+    return state.clubs[clubIndex]?.players.find((player) => player.id === playerId) || null;
+  }
+
+  function makeSlotKey(timeIndex, courtId) {
+    return `${timeIndex}::${courtId}`;
+  }
+
+  function parseSlotKey(slotKey) {
+    const [timeIndexRaw, courtId] = String(slotKey).split("::");
+    const timeIndex = Number(timeIndexRaw);
+
+    if (!Number.isInteger(timeIndex) || !courtId) {
+      return null;
+    }
+
+    return { timeIndex, courtId };
+  }
+
+  function compactPlayerIds(playerIds) {
+    const source = Array.isArray(playerIds) ? playerIds : [];
+    const result = [];
+
+    source.forEach((id) => {
+      const value = String(id || "").trim();
+      if (!value || result.includes(value)) {
+        return;
+      }
+      result.push(value);
+    });
+
+    return result.slice(0, 2);
+  }
+
+  function startNowLineTimer() {
+    if (nowLineTimer) {
+      window.clearInterval(nowLineTimer);
+    }
+
+    syncNowLine();
+    nowLineTimer = window.setInterval(syncNowLine, 30000);
+  }
+
+  function syncNowLine() {
+    if (!el.nowLine || !el.scheduleTable || !el.tableWrap) {
+      return;
+    }
+
+    const current = getCurrentTimePosition();
+    if (!current) {
+      el.nowLine.classList.add("hidden");
+      return;
+    }
+
+    const rowEl = el.scheduleTable.querySelector(`tbody tr[data-time-index="${current.timeIndex}"]`);
+    if (!rowEl) {
+      el.nowLine.classList.add("hidden");
+      return;
+    }
+
+    const wrapRect = el.tableWrap.getBoundingClientRect();
+    const rowRect = rowEl.getBoundingClientRect();
+    const top = rowRect.top - wrapRect.top + rowRect.height * current.ratio + el.tableWrap.scrollTop;
+
+    el.nowLine.style.top = `${top}px`;
+    el.nowLine.style.width = `${el.scheduleTable.scrollWidth}px`;
+    el.nowLine.style.transform = `translateX(${-el.tableWrap.scrollLeft}px)`;
+    el.nowLineLabel.textContent = `현재 ${current.label}`;
+    el.nowLine.classList.remove("hidden");
+  }
+
+  function getCurrentTimePosition() {
+    const now = new Date();
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+    for (let i = 0; i < state.times.length; i += 1) {
+      const range = parseTimeRangeLabel(state.times[i]);
+      if (!range) {
+        continue;
+      }
+
+      const duration = range.end - range.start;
+      if (duration <= 0) {
+        continue;
+      }
+
+      if (nowMinutes >= range.start && nowMinutes <= range.end) {
+        const ratio = clamp((nowMinutes - range.start) / duration, 0, 1);
+        return {
+          timeIndex: i,
+          ratio,
+          label: toHHMM(nowMinutes),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function parseTimeRangeLabel(label) {
+    const [startRaw, endRaw] = String(label || "").split("-");
+    const start = toMinutes(startRaw);
+    const end = toMinutes(endRaw);
+
+    if (start === null || end === null) {
+      return null;
+    }
+
+    return { start, end };
+  }
+
+  function isCompletedScore(match) {
+    const scoreA = toNullableNumber(match.scoreA);
+    const scoreB = toNullableNumber(match.scoreB);
+    return scoreA !== null && scoreB !== null;
+  }
+
+  function toNullableNumber(value) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) {
+      return null;
+    }
+
+    return num;
+  }
+
+  function toSafeNumber(value) {
+    return toNullableNumber(value) ?? 0;
+  }
+
+  function saveState(showMessage) {
+    state.updatedAt = new Date().toISOString();
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+
+    if (showMessage) {
+      renderSaveStatus("저장 완료");
+      window.clearTimeout(saveHintTimer);
+      saveHintTimer = window.setTimeout(() => {
+        renderSaveStatus();
+      }, 1200);
+      return;
+    }
+
+    renderSaveStatus();
+  }
+
+  function renderSaveStatus(message) {
+    if (message) {
+      el.saveStatus.textContent = message;
+      return;
+    }
+
+    const updated = state.updatedAt ? new Date(state.updatedAt) : null;
+    if (!updated || Number.isNaN(updated.getTime())) {
+      el.saveStatus.textContent = "자동 저장 준비됨";
+      return;
+    }
+
+    const stamp = updated.toLocaleString("ko-KR", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+    el.saveStatus.textContent = `자동 저장: ${stamp}`;
+  }
+
+  function downloadAutoBackupJson() {
+    saveState(false);
+    downloadStateSnapshot({
+      filenamePrefix: "tennis-club-auto-backup",
+      statusMessage: "자동 백업 다운로드 완료",
+    });
+  }
+
+  function downloadStateSnapshot({ filenamePrefix, statusMessage }) {
+    const payload = JSON.stringify(state, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    const now = formatFileTimestamp(new Date());
+    a.href = url;
+    a.download = `${filenamePrefix}-${now}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+    renderSaveStatus(statusMessage || "백업 다운로드 완료");
+    window.clearTimeout(saveHintTimer);
+    saveHintTimer = window.setTimeout(() => renderSaveStatus(), 1200);
+  }
+
+  function formatFileTimestamp(date) {
+    const safeDate = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+    const year = String(safeDate.getFullYear());
+    const month = String(safeDate.getMonth() + 1).padStart(2, "0");
+    const day = String(safeDate.getDate()).padStart(2, "0");
+    const hour = String(safeDate.getHours()).padStart(2, "0");
+    const minute = String(safeDate.getMinutes()).padStart(2, "0");
+    const second = String(safeDate.getSeconds()).padStart(2, "0");
+
+    return `${year}-${month}-${day}-${hour}-${minute}-${second}`;
+  }
+
+  function importFromFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        state = normalizeState(parsed);
+        editingPlayer = null;
+        playerSortState = [defaultPlayerSort(), defaultPlayerSort()];
+        renderAll();
+        saveState(true);
+      } catch (error) {
+        window.alert("JSON 파일 형식이 올바르지 않습니다.");
+      }
+    };
+
+    reader.readAsText(file);
+    event.target.value = "";
+  }
+
+  function loadState() {
+    try {
+      const current = window.localStorage.getItem(STORAGE_KEY);
+      if (current) {
+        return JSON.parse(current);
+      }
+
+      for (const key of LEGACY_STORAGE_KEYS) {
+        const legacy = window.localStorage.getItem(key);
+        if (legacy) {
+          return JSON.parse(legacy);
+        }
+      }
+
+      return defaultState();
+    } catch (error) {
+      return defaultState();
+    }
+  }
+
+  function defaultState() {
+    const times = generateTimeSlots(
+      DEFAULT_TIME_CONFIG.start,
+      DEFAULT_TIME_CONFIG.end,
+      DEFAULT_TIME_CONFIG.interval
+    );
+
+    return {
+      matchName: "",
+      matchDate: "",
+      matchLocation: "",
+      updatedAt: "",
+      clubs: [
+        { id: createId("club"), name: "그린테니스", players: [] },
+        { id: createId("club"), name: "행빡테니스", players: [] },
+      ],
+      courts: Array.from({ length: 4 }, (_, index) => ({
+        id: createId("court"),
+        name: `코트${index + 1}`,
+      })),
+      timeConfig: { ...DEFAULT_TIME_CONFIG },
+      times,
+      matches: {},
+    };
+  }
+
+  function normalizeState(input) {
+    const base = defaultState();
+    const source = isObject(input) ? input : {};
+
+    const clubsSource = Array.isArray(source.clubs) ? source.clubs.slice(0, 2) : [];
+    while (clubsSource.length < 2) {
+      clubsSource.push(base.clubs[clubsSource.length]);
+    }
+
+    const clubs = clubsSource.map((club, index) => normalizeClub(club, base.clubs[index].name));
+
+    const courtsSource = Array.isArray(source.courts) && source.courts.length > 0 ? source.courts : base.courts;
+    const courts = courtsSource.map((court, index) => normalizeCourt(court, index));
+
+    const timeConfig = normalizeTimeConfig(source.timeConfig, source.times);
+
+    const sourceTimes = Array.isArray(source.times)
+      ? source.times.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+
+    const generatedTimes =
+      generateTimeSlots(timeConfig.start, timeConfig.end, timeConfig.interval) ||
+      generateTimeSlots(DEFAULT_TIME_CONFIG.start, DEFAULT_TIME_CONFIG.end, DEFAULT_TIME_CONFIG.interval) ||
+      [];
+
+    const times = sourceTimes.length > 0 ? sourceTimes : generatedTimes;
+
+    const matchesSource = isObject(source.matches) ? source.matches : {};
+    const matches = {};
+
+    Object.entries(matchesSource).forEach(([slotKey, match]) => {
+      const parsed = parseSlotKey(slotKey);
+      if (!parsed) {
+        return;
+      }
+
+      const validTime = parsed.timeIndex >= 0 && parsed.timeIndex < times.length;
+      const validCourt = courts.some((court) => court.id === parsed.courtId);
+      if (!validTime || !validCourt) {
+        return;
+      }
+
+      matches[slotKey] = normalizeMatch(match);
+    });
+
+    return {
+      matchName: String(source.matchName || ""),
+      matchDate: String(source.matchDate || ""),
+      matchLocation: String(source.matchLocation || ""),
+      updatedAt: String(source.updatedAt || ""),
+      clubs,
+      courts,
+      timeConfig,
+      times,
+      matches,
+    };
+  }
+
+  function normalizeTimeConfig(rawConfig, rawTimes) {
+    const source = isObject(rawConfig) ? rawConfig : {};
+
+    const start = isHHMM(source.start) ? source.start : deriveTimeStart(rawTimes) || DEFAULT_TIME_CONFIG.start;
+    const end = isHHMM(source.end) ? source.end : deriveTimeEnd(rawTimes) || DEFAULT_TIME_CONFIG.end;
+    const interval = Number.isFinite(Number(source.interval)) ? Number(source.interval) : deriveTimeInterval(rawTimes);
+
+    const safeInterval =
+      Number.isFinite(interval) && interval >= 5 && interval <= 180
+        ? Math.floor(interval)
+        : DEFAULT_TIME_CONFIG.interval;
+
+    if (toMinutes(start) === null || toMinutes(end) === null || toMinutes(end) <= toMinutes(start)) {
+      return { ...DEFAULT_TIME_CONFIG };
+    }
+
+    return {
+      start,
+      end,
+      interval: safeInterval,
+    };
+  }
+
+  function deriveTimeStart(rawTimes) {
+    if (!Array.isArray(rawTimes) || rawTimes.length === 0) {
+      return "";
+    }
+
+    const first = parseTimeRangeLabel(rawTimes[0]);
+    return first ? toHHMM(first.start) : "";
+  }
+
+  function deriveTimeEnd(rawTimes) {
+    if (!Array.isArray(rawTimes) || rawTimes.length === 0) {
+      return "";
+    }
+
+    const last = parseTimeRangeLabel(rawTimes[rawTimes.length - 1]);
+    return last ? toHHMM(last.end) : "";
+  }
+
+  function deriveTimeInterval(rawTimes) {
+    if (!Array.isArray(rawTimes) || rawTimes.length === 0) {
+      return DEFAULT_TIME_CONFIG.interval;
+    }
+
+    const first = parseTimeRangeLabel(rawTimes[0]);
+    if (!first) {
+      return DEFAULT_TIME_CONFIG.interval;
+    }
+
+    const value = first.end - first.start;
+    return value > 0 ? value : DEFAULT_TIME_CONFIG.interval;
+  }
+
+  function generateTimeSlots(startHHMM, endHHMM, intervalMinutes) {
+    const start = toMinutes(startHHMM);
+    const end = toMinutes(endHHMM);
+    const interval = Number(intervalMinutes);
+
+    if (
+      start === null ||
+      end === null ||
+      !Number.isFinite(interval) ||
+      interval < 5 ||
+      interval > 180 ||
+      end <= start
+    ) {
+      return null;
+    }
+
+    const slots = [];
+    for (let cursor = start; cursor + interval <= end; cursor += interval) {
+      slots.push(`${toHHMM(cursor)}-${toHHMM(cursor + interval)}`);
+    }
+
+    return slots;
+  }
+
+  function normalizeClub(club, fallbackName) {
+    const source = isObject(club) ? club : {};
+    const players = Array.isArray(source.players) ? source.players : [];
+
+    return {
+      id: source.id ? String(source.id) : createId("club"),
+      name: String(source.name || fallbackName || "클럽"),
+      players: players.map((player) => normalizePlayer(player)),
+    };
+  }
+
+  function normalizePlayer(player) {
+    const source = isObject(player) ? player : {};
+
+    return {
+      id: source.id ? String(source.id) : createId("player"),
+      name: String(source.name || ""),
+      gender: source.gender === "F" ? "F" : "M",
+      experience: String(source.experience || ""),
+      age: source.age === undefined || source.age === null ? "" : String(source.age),
+    };
+  }
+
+  function normalizeCourt(court, index) {
+    const source = isObject(court) ? court : {};
+
+    return {
+      id: source.id ? String(source.id) : createId("court"),
+      name: String(source.name || `코트${index + 1}`),
+    };
+  }
+
+  function emptyMatch() {
+    return {
+      clubAPlayerIds: ["", ""],
+      clubBPlayerIds: ["", ""],
+      scoreA: "",
+      scoreB: "",
+      memo: "",
+    };
+  }
+
+  function normalizeMatch(match) {
+    const source = isObject(match) ? match : {};
+    const clubAPlayerIds = Array.isArray(source.clubAPlayerIds)
+      ? source.clubAPlayerIds.slice(0, 2).map((item) => String(item || ""))
+      : ["", ""];
+    const clubBPlayerIds = Array.isArray(source.clubBPlayerIds)
+      ? source.clubBPlayerIds.slice(0, 2).map((item) => String(item || ""))
+      : ["", ""];
+
+    while (clubAPlayerIds.length < 2) {
+      clubAPlayerIds.push("");
+    }
+    while (clubBPlayerIds.length < 2) {
+      clubBPlayerIds.push("");
+    }
+
+    return {
+      clubAPlayerIds,
+      clubBPlayerIds,
+      scoreA: normalizeScore(source.scoreA),
+      scoreB: normalizeScore(source.scoreB),
+      memo: String(source.memo || ""),
+    };
+  }
+
+  function normalizeScore(value) {
+    if (value === null || value === undefined || value === "") {
+      return "";
+    }
+
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) {
+      return "";
+    }
+
+    return String(Math.floor(num));
+  }
+
+  function toMinutes(hhmm) {
+    const text = String(hhmm || "").trim();
+    const matched = text.match(/^(\d{1,2}):(\d{2})$/);
+    if (!matched) {
+      return null;
+    }
+
+    const hour = Number(matched[1]);
+    const minute = Number(matched[2]);
+
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+
+    return hour * 60 + minute;
+  }
+
+  function toHHMM(totalMinutes) {
+    const minutes = ((Number(totalMinutes) % 1440) + 1440) % 1440;
+    const hour = Math.floor(minutes / 60);
+    const minute = minutes % 60;
+
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function isHHMM(value) {
+    return toMinutes(value) !== null;
+  }
+
+  function formatSigned(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      return "0";
+    }
+    if (num > 0) {
+      return `+${num}`;
+    }
+    return String(num);
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function createId(prefix) {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function escapeAttr(value) {
+    return escapeHtml(value);
+  }
+
+  function isObject(value) {
+    return typeof value === "object" && value !== null;
+  }
+})();
