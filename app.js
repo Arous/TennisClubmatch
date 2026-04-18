@@ -33,6 +33,7 @@
     supabaseUrlInput: document.getElementById("supabaseUrlInput"),
     supabaseAnonKeyInput: document.getElementById("supabaseAnonKeyInput"),
     syncRoomInput: document.getElementById("syncRoomInput"),
+    syncWritePasswordInput: document.getElementById("syncWritePasswordInput"),
     connectSyncBtn: document.getElementById("connectSyncBtn"),
     disconnectSyncBtn: document.getElementById("disconnectSyncBtn"),
     syncStatus: document.getElementById("syncStatus"),
@@ -125,7 +126,17 @@
     });
 
     el.saveNowBtn.addEventListener("click", () => {
-      saveState(true);
+      const latestWritePassword = String(el.syncWritePasswordInput?.value || "").trim();
+      if (latestWritePassword !== syncConfig.writePassword) {
+        saveSyncConfig({ ...syncConfig, writePassword: latestWritePassword });
+      }
+
+      const allowCloudSync = requestCloudSaveApproval();
+      saveState(true, {
+        forceSync: allowCloudSync,
+        skipSync: syncConnected && !allowCloudSync,
+        saveMessage: allowCloudSync ? "저장 완료" : "로컬 저장 완료 (클라우드 미반영)",
+      });
     });
 
     el.exportBtn.addEventListener("click", downloadAutoBackupJson);
@@ -149,7 +160,10 @@
       editingPlayer = null;
       playerSortState = [defaultPlayerSort(), defaultPlayerSort()];
       renderAll();
-      saveState(true);
+      saveState(true, { skipSync: true, saveMessage: "로컬 초기화 완료 (클라우드 미반영)" });
+      if (syncConnected) {
+        renderSyncStatus("초기화는 로컬에만 적용됨 (클라우드 미반영)");
+      }
     });
 
     el.addCourtBtn.addEventListener("click", () => {
@@ -478,6 +492,7 @@
       url: String(source.url || "").trim(),
       anonKey: String(source.anonKey || "").trim(),
       roomId: sanitizeRoomId(source.roomId),
+      writePassword: String(source.writePassword || "").trim(),
       autoConnect: source.autoConnect !== false,
     };
   }
@@ -508,13 +523,14 @@
   }
 
   function renderSyncConfigInputs() {
-    if (!el.supabaseUrlInput || !el.supabaseAnonKeyInput || !el.syncRoomInput) {
+    if (!el.supabaseUrlInput || !el.supabaseAnonKeyInput || !el.syncRoomInput || !el.syncWritePasswordInput) {
       return;
     }
 
     el.supabaseUrlInput.value = syncConfig.url;
     el.supabaseAnonKeyInput.value = syncConfig.anonKey;
     el.syncRoomInput.value = syncConfig.roomId;
+    el.syncWritePasswordInput.value = syncConfig.writePassword;
   }
 
   function readSyncConfigFromInputs() {
@@ -522,12 +538,39 @@
       url: String(el.supabaseUrlInput?.value || ""),
       anonKey: String(el.supabaseAnonKeyInput?.value || ""),
       roomId: String(el.syncRoomInput?.value || ""),
+      writePassword: String(el.syncWritePasswordInput?.value || ""),
       autoConnect: true,
     });
   }
 
   function hasSyncCredentials(config) {
     return !!(config.url && config.anonKey && config.roomId);
+  }
+
+  function isSyncWriteProtected() {
+    return !!syncConfig.writePassword;
+  }
+
+  function requestCloudSaveApproval() {
+    if (!syncConnected || !syncClient) {
+      return false;
+    }
+    if (!isSyncWriteProtected()) {
+      return true;
+    }
+
+    const entered = window.prompt("클라우드 저장 비밀번호를 입력하세요.");
+    if (entered === null) {
+      renderSyncStatus("비밀번호 입력이 취소되어 로컬 저장만 적용됩니다.");
+      return false;
+    }
+
+    if (String(entered) !== syncConfig.writePassword) {
+      renderSyncStatus("비밀번호가 올바르지 않아 클라우드 저장이 차단되었습니다.", { error: true });
+      return false;
+    }
+
+    return true;
   }
 
   function renderSyncStatus(message, { error = false } = {}) {
@@ -586,14 +629,26 @@
       syncConnected = true;
 
       const remoteRow = await fetchRemoteSyncRow();
-      if (remoteRow?.payload && shouldApplyRemoteState(remoteRow.payload, remoteRow.updated_at)) {
+      if (remoteRow?.payload) {
+        // 연결 즉시 원격 데이터를 우선 반영해 새로고침 없이 같은 화면을 보게 합니다.
         applyRemoteState(remoteRow.payload, { source: "초기 동기화" });
       } else {
-        await pushStateToCloud({ immediate: true });
+        if (!isSyncWriteProtected()) {
+          await pushStateToCloud({ immediate: true });
+        } else {
+          renderSyncStatus(
+            `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId}) · 원격 데이터 없음, 저장 버튼 비밀번호 인증 후 업로드`,
+            { error: false }
+          );
+        }
       }
 
       subscribeSyncChannel();
-      renderSyncStatus(`클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`);
+      renderSyncStatus(
+        isSyncWriteProtected()
+          ? `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId}) · 저장 시 비밀번호 필요`
+          : `클라우드 동기화 연결됨 (Room: ${syncConfig.roomId})`
+      );
     } catch (error) {
       syncConnected = false;
       syncClient = null;
@@ -2408,15 +2463,20 @@
     return toNullableNumber(value) ?? 0;
   }
 
-  function saveState(showMessage) {
+  function saveState(showMessage, options = {}) {
+    const { forceSync = false, skipSync = false, saveMessage = "저장 완료" } = options;
     state.updatedAt = new Date().toISOString();
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (syncConnected && !syncPullInProgress) {
-      queueSyncPush({ immediate: !!showMessage });
+    const shouldSync =
+      syncConnected && !syncPullInProgress && !skipSync && (forceSync || !isSyncWriteProtected());
+    if (shouldSync) {
+      queueSyncPush({ immediate: !!showMessage || forceSync });
     }
 
     if (showMessage) {
-      renderSaveStatus("저장 완료");
+      const finalSaveMessage =
+        syncConnected && !shouldSync ? "로컬 저장 완료 (클라우드 미반영)" : saveMessage;
+      renderSaveStatus(finalSaveMessage);
       window.clearTimeout(saveHintTimer);
       saveHintTimer = window.setTimeout(() => {
         renderSaveStatus();
